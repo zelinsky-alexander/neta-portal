@@ -51,6 +51,6 @@ export function loadConfig(): PortalConfig {
     cert,
     key,
     allowInsecureHttp,
-    legacyOperatorApi: bool('NETA_PORTAL_LEGACY_OPERATOR_API', true)
+    legacyOperatorApi: bool('NETA_PORTAL_LEGACY_OPERATOR_API', false)
   };
 }
