@@ -7,7 +7,8 @@
     "dev": "concurrently -k \"vite --host 0.0.0.0\" \"tsx watch server/server.ts\"",
     "build": "tsc --noEmit && vite build",
     "start": "tsx server/server.ts",
-    "test": "vitest run"
+    "test": "vitest run",
+    "hash-password": "tsx scripts/hash-password.ts"
   },
   "dependencies": {
     "@fastify/helmet": "^13.0.0",
