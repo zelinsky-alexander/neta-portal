@@ -12,20 +12,30 @@ export class CoordinatorError extends Error {
   }
 }
 
+type RequestInit = {
+  method?: 'GET' | 'POST';
+  body?: URLSearchParams;
+  admin?: boolean;
+  idempotencyKey?: string;
+  requestId?: string;
+};
+
 export class CoordinatorClient {
   constructor(private readonly config: PortalConfig) {}
 
-  async request(path: string, init: { method?: 'GET' | 'POST'; body?: URLSearchParams; admin?: boolean } = {}): Promise<string> {
+  async request(path: string, init: RequestInit = {}): Promise<string> {
     const target = new URL(path, this.config.coordinatorUrl);
     const body = init.body?.toString();
     const headers: Record<string, string> = {
       accept: 'application/json, text/plain;q=0.9',
-      'user-agent': 'neta-portal/0.1.1'
+      'user-agent': 'neta-portal/0.2.0'
     };
     if (body) {
       headers['content-type'] = 'application/x-www-form-urlencoded';
       headers['content-length'] = Buffer.byteLength(body).toString();
     }
+    if (init.idempotencyKey) headers['idempotency-key'] = init.idempotencyKey;
+    if (init.requestId) headers['x-request-id'] = init.requestId;
     if (init.admin) {
       if (!this.config.adminToken) throw new CoordinatorError('Coordinator admin operations are not configured', 503, '');
       headers['x-neta-admin-token'] = this.config.adminToken;
@@ -70,7 +80,7 @@ export class CoordinatorClient {
     });
   }
 
-  async requestJson<T>(path: string, init: { method?: 'GET' | 'POST'; body?: URLSearchParams; admin?: boolean } = {}): Promise<T> {
+  async requestJson<T>(path: string, init: RequestInit = {}): Promise<T> {
     const raw = await this.request(path, init);
     try {
       return JSON.parse(raw) as T;
