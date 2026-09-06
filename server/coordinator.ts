@@ -20,7 +20,7 @@ export class CoordinatorClient {
     const body = init.body?.toString();
     const headers: Record<string, string> = {
       accept: 'application/json, text/plain;q=0.9',
-      'user-agent': 'neta-portal/0.1'
+      'user-agent': 'neta-portal/0.1.1'
     };
     if (body) {
       headers['content-type'] = 'application/x-www-form-urlencoded';
@@ -52,7 +52,12 @@ export class CoordinatorClient {
           const responseBody = Buffer.concat(chunks).toString('utf8');
           const status = res.statusCode ?? 502;
           if (status < 200 || status >= 300) {
-            reject(new CoordinatorError(`Coordinator returned HTTP ${status}`, status, responseBody));
+            let message = `Coordinator returned HTTP ${status}`;
+            try {
+              const parsed = JSON.parse(responseBody) as { error?: string };
+              if (parsed.error) message = parsed.error;
+            } catch { /* preserve HTTP status message */ }
+            reject(new CoordinatorError(message, status, responseBody));
             return;
           }
           resolve(responseBody);
@@ -63,5 +68,14 @@ export class CoordinatorClient {
       if (body) req.write(body);
       req.end();
     });
+  }
+
+  async requestJson<T>(path: string, init: { method?: 'GET' | 'POST'; body?: URLSearchParams; admin?: boolean } = {}): Promise<T> {
+    const raw = await this.request(path, init);
+    try {
+      return JSON.parse(raw) as T;
+    } catch {
+      throw new CoordinatorError('Coordinator returned a non-JSON response for a JSON API', 502, raw);
+    }
   }
 }
