@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import { parseUsers, type PortalUser } from './auth.js';
 
 export type PortalConfig = {
   host: string;
@@ -6,11 +7,16 @@ export type PortalConfig = {
   coordinatorUrl: URL;
   timeoutMs: number;
   adminToken?: string;
+  portalServiceToken?: string;
+  portalServiceName: string;
   ca?: Buffer;
   cert?: Buffer;
   key?: Buffer;
   allowInsecureHttp: boolean;
   legacyOperatorApi: boolean;
+  users: PortalUser[];
+  sessionSecret: string;
+  sessionTtlSeconds: number;
 };
 
 function bool(name: string, fallback: boolean): boolean {
@@ -41,16 +47,30 @@ export function loadConfig(): PortalConfig {
     throw new Error('coordinator client certificate and key must be configured together');
   }
 
+  const users = parseUsers(process.env.NETA_PORTAL_USERS_JSON);
+  if (users.length === 0) throw new Error('NETA_PORTAL_USERS_JSON must configure at least one native portal user');
+  const sessionSecret = process.env.NETA_PORTAL_SESSION_SECRET ?? '';
+  if (Buffer.byteLength(sessionSecret) < 32) throw new Error('NETA_PORTAL_SESSION_SECRET must contain at least 32 bytes');
+  const sessionTtlSeconds = Number(process.env.NETA_PORTAL_SESSION_TTL_SECONDS ?? '28800');
+  if (!Number.isInteger(sessionTtlSeconds) || sessionTtlSeconds < 300 || sessionTtlSeconds > 86400) {
+    throw new Error('NETA_PORTAL_SESSION_TTL_SECONDS must be between 300 and 86400 seconds');
+  }
+
   return {
     host: process.env.HOST ?? '0.0.0.0',
     port: Number(process.env.PORT ?? '8080'),
     coordinatorUrl,
     timeoutMs: Number(process.env.NETA_COORDINATOR_REQUEST_TIMEOUT_MS ?? '5000'),
     adminToken: process.env.NETA_COORDINATOR_ADMIN_TOKEN || undefined,
+    portalServiceToken: process.env.NETA_COORDINATOR_PORTAL_SERVICE_TOKEN || undefined,
+    portalServiceName: process.env.NETA_PORTAL_SERVICE_NAME || 'neta-portal',
     ca,
     cert,
     key,
     allowInsecureHttp,
-    legacyOperatorApi: bool('NETA_PORTAL_LEGACY_OPERATOR_API', false)
+    legacyOperatorApi: bool('NETA_PORTAL_LEGACY_OPERATOR_API', false),
+    users,
+    sessionSecret,
+    sessionTtlSeconds
   };
 }
