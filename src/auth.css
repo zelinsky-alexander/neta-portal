@@ -1,0 +1,19 @@
+.login-shell { min-height: 100vh; display: grid; place-items: center; padding: 24px; background: radial-gradient(circle at 50% 10%, #12233c 0, #08101d 42%); }
+.login-card { width: min(430px,100%); display: grid; gap: 16px; padding: 30px; background: #0d1727; border: 1px solid #26364c; border-radius: 16px; box-shadow: 0 28px 90px rgba(0,0,0,.4); }
+.login-brand { padding: 0 0 8px; }
+.login-card h1 { font-size: 25px; }
+.login-card > p { margin: -7px 0 3px; color: #8796aa; font-size: 13px; line-height: 1.55; }
+.login-card label { display: grid; gap: 7px; color: #9aa7b9; font-size: 12px; font-weight: 700; }
+.login-card input { width: 100%; min-width: 0; }
+.login-card button { margin-top: 3px; }
+.login-error { color: #ff9ca2; font-size: 12px; }
+.identity-card { margin: -8px 8px 18px; padding: 10px 12px; background: #0e1b2d; border: 1px solid #1f3046; border-radius: 9px; display: grid; gap: 3px; }
+.identity-card strong { overflow: hidden; text-overflow: ellipsis; font-size: 12px; }
+.identity-card span { color: #7f91aa; font-size: 10px; letter-spacing: .08em; font-weight: 800; }
+.aside-footer button { width: 100%; }
+.form-grid .wide { grid-column: 1 / -1; }
+button.danger { background: #852d3a; border-color: #ac4553; }
+button.danger:hover:not(:disabled) { background: #9a3544; }
+.link-button { padding: 0; border: 0; background: transparent; color: #8cb5ff; font-weight: 700; }
+.link-button:hover:not(:disabled) { background: transparent; color: #b7d0ff; text-decoration: underline; }
+@media (max-width:720px) { .form-grid .wide { grid-column: auto; } .login-card { padding: 22px; } }
