@@ -56,14 +56,30 @@ export function parseAgents(text: string): AgentSummary[] {
   }));
 }
 
+function findingFromColumns(c: string[]): FindingSummary | undefined {
+  if (c.length >= 9) {
+    return {
+      lastSeen: c[0], agent: c[1], target: c[2], trust: c[3], performance: c[4],
+      count: Number(c[5]), status: c[6], incident: c[7], id: c[8]
+    };
+  }
+  if (c.length === 8) {
+    const countStatus = c[5].trim().split(/\s+/);
+    if (countStatus.length !== 2) return undefined;
+    return {
+      lastSeen: c[0], agent: c[1], target: c[2], trust: c[3], performance: c[4],
+      count: Number(countStatus[0]), status: countStatus[1], incident: c[6], id: c[7]
+    };
+  }
+  return undefined;
+}
+
 export function parseFindingSearch(text: string): { total: number; items: FindingSummary[] } {
   const lines = dataLines(text);
   const total = Number(lines[0]?.match(/Findings matched:\s*(\d+)/)?.[1] ?? 0);
   const start = lines.findIndex((line) => line.includes('LAST SEEN') && line.includes('FINDING'));
   if (start < 0) return { total, items: [] };
-  const items = lines.slice(start + 2).map(columns).filter((c) => c.length >= 9).map((c) => ({
-    lastSeen: c[0], agent: c[1], target: c[2], trust: c[3], performance: c[4], count: Number(c[5]), status: c[6], incident: c[7], id: c[8]
-  }));
+  const items = lines.slice(start + 2).map(columns).map(findingFromColumns).filter((item): item is FindingSummary => Boolean(item));
   return { total, items };
 }
 
