@@ -2,7 +2,7 @@
 
 Secure web control and observability portal for NETA agents and fleets.
 
-Portal **0.1.1** is a Dockerized React/TypeScript application with a thin stateless Fastify BFF. All authoritative fleet state and control logic remain in `neta-coordinator`; the browser never talks directly to agents or receives coordinator credentials.
+Portal **0.2.0** is a Dockerized React/TypeScript application with a thin stateless Fastify BFF. All authoritative fleet state and control logic remain in `neta-coordinator`; the browser never talks directly to agents or receives coordinator credentials.
 
 The controlling design is [`docs/NETA_PORTAL_ARCHITECTURE_AND_DESIGN.md`](docs/NETA_PORTAL_ARCHITECTURE_AND_DESIGN.md).
 
@@ -12,29 +12,29 @@ Implemented:
 
 - Professional responsive dashboard
 - Linux/Windows agent presentation
-- Agent list and agent detail
-- Findings list/filtering
-- Upgrade status visibility
-- Certificate lifecycle visibility
-- Portal/coordinator health
-- Thin same-origin BFF
+- Cursor-paginated agent, finding, upgrade and certificate views
+- Server-side coordinator filtering and aggregate fleet summary
+- Agent detail and coordinator/system health
+- **Typed agent upgrade requests with two-step confirmation**
+- **Agent identity revoke/reactivate with mandatory operator reason**
+- **Certificate rotation using an agent-generated CSR**
+- Coordinator-owned audit for the existing administration operations
+- Portal-generated request IDs and idempotency keys forwarded to coordinator
+- Same-origin mutation marker and cross-origin mutation rejection
+- Coordinator admin credential kept server-side only
 - HTTPS/mTLS support from portal to coordinator
 - Strict CSP/security headers
-- Non-root, read-only Docker runtime
-- Cursor pagination for agents, findings, upgrades and certificates
-- Server-side coordinator filtering and stable ordering
-- Aggregate fleet summary API for dashboard metrics
-- Structured coordinator JSON errors
-- CI build/tests/container build
+- Non-root, read-only Docker runtime with dropped Linux capabilities
+- CI tests/build/container build
 - Dependabot
 
-Intentionally not exposed yet:
+Not implemented yet:
 
-- Upgrade mutations
-- Certificate revoke/reactivate/rotate from the browser
-- Native portal users/RBAC
-
-Those are Portal 0.2/0.3 work and must use the coordinator-owned, audited, idempotent mutation model from the architecture document.
+- Native portal users/RBAC (Portal 0.3)
+- Coordinator-enforced idempotency-key deduplication
+- Global audit-log read API/UI
+- SSE live updates
+- Fleet-wide staged rollout policy UI
 
 ## Architecture
 
@@ -52,6 +52,7 @@ Cloudflare Tunnel / reverse proxy
 neta-portal container
    |  React SPA
    |  stateless BFF
+   |  coordinator credentials stay here
    |
    | HTTPS + mTLS
    v
@@ -63,9 +64,9 @@ PostgreSQL / agent control plane
 
 The portal has no fleet database and never communicates directly with agents.
 
-## Portal 0.1.1 coordinator API
+## Coordinator API requirements
 
-Portal 0.1.1 uses native structured coordinator APIs under `/api/v1`:
+Portal 0.2 uses the native Portal 0.1.1 read APIs:
 
 ```text
 GET /actuator/health
@@ -73,32 +74,68 @@ GET /api/v1/fleet/summary
 GET /api/v1/agents?limit=50&cursor=...
 GET /api/v1/agents/{agentId}
 GET /api/v1/findings?limit=50&cursor=...
-GET /api/v1/findings/{findingId}
 GET /api/v1/certificates?limit=50&cursor=...
 GET /api/v1/upgrades?limit=50&cursor=...
 ```
 
-The coordinator implementation for this contract is developed on branch:
+The coordinator implementation for that read contract currently lives on:
 
 ```text
 neta-coordinator: portal-0.1.1-json-api
 ```
 
-Do not deploy Portal 0.1.1 in native mode against an older coordinator that lacks these endpoints.
+Portal 0.2 control workflows call the existing coordinator-owned typed operations:
 
-A temporary rollback compatibility mode remains available:
+```text
+POST /api/v1/operator/agent-upgrade
+POST /api/v1/operator/agent-revoke
+POST /api/v1/operator/agent-reactivate
+POST /api/v1/operator/certificate-rotate
+```
+
+These operations require `NETA_OPERATOR_ADMIN_TOKEN` on the coordinator. The portal supplies that credential only from its BFF; it is never sent to browser JavaScript.
+
+The temporary rollback compatibility mode remains available:
 
 ```text
 NETA_PORTAL_LEGACY_OPERATOR_API=true
 ```
 
-This re-enables the old `/api/v1/operator/*` text adapter. It is **not suitable for large fleets** and should remain disabled for normal Portal 0.1.1 deployments.
+It is **not suitable for large fleets** and should remain disabled for normal Portal 0.2 deployments.
 
 Default:
 
 ```text
 NETA_PORTAL_LEGACY_OPERATOR_API=false
 ```
+
+## Portal 0.2 control semantics
+
+### Agent upgrade
+
+The browser asks the BFF to request an upgrade. The BFF calls the coordinator typed upgrade endpoint. The coordinator resolves and persists the immutable target and creates the durable upgrade lifecycle; the agent remains responsible for download, verification, installation, health checking and reporting the resulting build identity.
+
+The portal does not expose a remote shell or arbitrary command endpoint.
+
+### Revoke/reactivate identity
+
+Revoke prevents future messages from that enrolled agent identity until explicitly reactivated. Both actions require a reason and are recorded by the coordinator audit path.
+
+### Certificate rotation
+
+Rotation requires a CSR that was generated by the agent. **Never paste or upload an agent private key into the portal.** The coordinator issues the replacement certificate chain and records the rotation event. The returned public certificate chain must then be delivered through the existing secure agent certificate workflow.
+
+## Idempotency status
+
+Portal 0.2 requires a unique `Idempotency-Key` for every browser mutation and forwards it, together with a server-generated `X-Request-ID`, to the coordinator.
+
+The current coordinator does **not yet enforce retry deduplication by `Idempotency-Key`**. Therefore:
+
+- do not blindly retry an operation after an ambiguous network failure;
+- first inspect the upgrade/agent/certificate state in the coordinator/portal;
+- coordinator-side idempotency enforcement is required before claiming exactly-once retry behavior.
+
+The portal deliberately does not implement in-memory deduplication because portal instances must remain stateless and horizontally scalable.
 
 ## Security requirements
 
@@ -110,10 +147,12 @@ For any Internet-accessible installation:
 2. Prefer Cloudflare Tunnel instead of exposing the portal host directly.
 3. Use HTTPS/mTLS from portal BFF to coordinator.
 4. Use a dedicated portal client certificate; never reuse an agent identity.
-5. Mount the portal client private key, certificate and coordinator CA read-only.
-6. Do not expose coordinator credentials to browser JavaScript.
+5. Mount portal client private key, certificate and coordinator CA read-only.
+6. Keep the coordinator admin token server-side only.
 7. Keep `NETA_COORDINATOR_ALLOW_INSECURE_HTTP=false` except for isolated development.
 8. Do not expose container port 8080 directly to the Internet.
+9. Treat Portal 0.2 as a privileged administration application.
+10. Native per-user RBAC is still Portal 0.3 work; until then Cloudflare Access must restrict who can reach the application.
 
 The production container runs non-root, drops Linux capabilities, uses `no-new-privileges`, has a read-only root filesystem and sends restrictive browser security headers.
 
@@ -152,7 +191,7 @@ Vite proxies `/portal-api/*` to the local BFF on port 8080.
 
 ## Coordinator preparation
 
-For Portal 0.1.1 testing before the coordinator branch is merged:
+Until the Portal 0.1.1 JSON read branch is merged into coordinator `main`:
 
 ```bash
 git clone https://github.com/zelinsky-alexander/neta-coordinator.git
@@ -161,26 +200,20 @@ git checkout portal-0.1.1-json-api
 mvn -B verify
 ```
 
-Deploy that coordinator build using the normal NETA coordinator deployment procedure. Flyway applies the Portal 0.1.1 read-path indexes automatically.
+Configure the coordinator administrative token for Portal 0.2 write operations:
 
-Verify the native API directly from a trusted machine with the required coordinator TLS/mTLS credentials:
+```text
+NETA_OPERATOR_ADMIN_TOKEN=<strong-random-secret>
+```
+
+Deploy the coordinator using the normal NETA coordinator procedure. Flyway applies the Portal 0.1.1 read-path indexes automatically.
+
+Verify the read API directly from a trusted machine with the required coordinator TLS/mTLS credentials:
 
 ```bash
 curl https://COORDINATOR:8443/api/v1/fleet/summary
 curl 'https://COORDINATOR:8443/api/v1/agents?limit=10'
-curl 'https://COORDINATOR:8443/api/v1/findings?limit=10'
 ```
-
-Expected list shape:
-
-```json
-{
-  "items": [],
-  "nextCursor": null
-}
-```
-
-When `nextCursor` is non-null, pass it back as the next request's `cursor` parameter.
 
 ## Production deployment with Docker Compose
 
@@ -201,9 +234,10 @@ NETA_COORDINATOR_URL=https://coordinator.internal.example:8443
 NETA_COORDINATOR_REQUEST_TIMEOUT_MS=5000
 NETA_PORTAL_LEGACY_OPERATOR_API=false
 NETA_COORDINATOR_ALLOW_INSECURE_HTTP=false
+NETA_COORDINATOR_ADMIN_TOKEN=<same value as coordinator NETA_OPERATOR_ADMIN_TOKEN>
 ```
 
-Portal 0.1.1 does not need `NETA_COORDINATOR_ADMIN_TOKEN` for read-only pages.
+Use a strong randomly generated admin token. Do not commit it to Git and do not expose it through frontend build variables.
 
 ### 2. Install portal-to-coordinator TLS material
 
@@ -247,6 +281,17 @@ curl -fsS http://127.0.0.1:8080/portal-api/dashboard
 curl -fsS 'http://127.0.0.1:8080/portal-api/agents?limit=10'
 ```
 
+`/portal-api/system` should report:
+
+```json
+{
+  "portal": { "status": "UP", "version": "0.2.0" },
+  "adminConfigured": true
+}
+```
+
+Do not test a destructive operation with curl against production unless you intend to perform it. The normal operator flow uses the portal confirmation UI.
+
 ## Same-machine coordinator integration
 
 If both services are containerized, attach them to a private Docker network and use a stable internal DNS name:
@@ -273,7 +318,8 @@ Requirements:
 - coordinator certificate validates for that hostname;
 - portal trusts the coordinator CA;
 - portal client certificate/key form the dedicated coordinator-trusted portal service identity;
-- firewall rules permit only the required portal-to-coordinator path.
+- firewall rules permit only the required portal-to-coordinator path;
+- the admin token is configured independently on both services and transmitted only over the protected portal-to-coordinator connection.
 
 No shared portal database or shared filesystem is required.
 
@@ -310,11 +356,11 @@ Recommended steps:
 6. Apply appropriate WAF/rate-limit policies.
 7. Do not open port 8080 publicly.
 
-Cloudflare is the edge. The actual portal HTTP server runs inside the Docker container.
+Because Portal 0.2 can mutate fleet state, Cloudflare Access is a deployment requirement until native Portal 0.3 authentication/RBAC is implemented.
 
 ## Scaling model
 
-Portal instances are stateless and can be horizontally replicated:
+Portal instances remain stateless and can be horizontally replicated:
 
 ```text
              Load balancer
@@ -324,15 +370,15 @@ Portal instances are stateless and can be horizontally replicated:
              coordinator
 ```
 
-Portal 0.1.1 removes the full-fleet text read from the normal path. Large tables use bounded keyset/cursor pagination and filters execute in PostgreSQL through coordinator APIs. Dashboard counts come from `/api/v1/fleet/summary` rather than downloading the fleet.
+Portal 0.2 does not add an operation database, local authoritative cache or in-process idempotency registry. Read paths remain cursor-paginated and dashboard metrics remain aggregate coordinator queries.
 
-The next scalability/control-plane steps remain:
+The next control/scalability work is primarily coordinator-side:
 
-- async long-running jobs;
-- idempotency keys for mutations;
-- scoped authorization for portal write operations;
-- SSE for incremental UI updates;
-- later separation of coordinator API, agent-ingress and worker roles when load requires it.
+- enforce idempotency keys for mutating APIs;
+- expose a structured audit read API;
+- add scoped service/user authorization;
+- add staged fleet rollout controls;
+- add SSE for incremental UI updates.
 
 ## Environment variables
 
@@ -345,9 +391,9 @@ The next scalability/control-plane steps remain:
 | `NETA_COORDINATOR_CA_FILE` | For private CA | — | Coordinator CA PEM |
 | `NETA_COORDINATOR_CLIENT_CERT_FILE` | For mTLS | — | Portal client certificate PEM |
 | `NETA_COORDINATOR_CLIENT_KEY_FILE` | For mTLS | — | Portal private key PEM |
-| `NETA_COORDINATOR_ADMIN_TOKEN` | No in 0.1.1 | — | Reserved for future audited mutation routes |
+| `NETA_COORDINATOR_ADMIN_TOKEN` | For Portal 0.2 writes | — | Server-side credential matching coordinator `NETA_OPERATOR_ADMIN_TOKEN` |
 | `NETA_COORDINATOR_ALLOW_INSECURE_HTTP` | No | `false` | Isolated development escape hatch |
-| `NETA_PORTAL_LEGACY_OPERATOR_API` | No | `false` | Temporary legacy text API fallback |
+| `NETA_PORTAL_LEGACY_OPERATOR_API` | No | `false` | Temporary legacy text read API fallback |
 
 ## Licensing
 
