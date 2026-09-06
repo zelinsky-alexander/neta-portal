@@ -3,6 +3,8 @@ services:
     build: .
     image: neta-portal:0.3.0
     restart: unless-stopped
+    extra_hosts:
+      - "neta-coordinator:host-gateway"
     environment:
       PORT: "8080"
       HOST: "0.0.0.0"
@@ -32,3 +34,16 @@ services:
       - ALL
     security_opt:
       - no-new-privileges:true
+
+  tunnel:
+    image: cloudflare/cloudflared:latest
+    restart: unless-stopped
+    network_mode: host
+    command:
+      - tunnel
+      - --no-autoupdate
+      - --url
+      - http://127.0.0.1:8080
+    depends_on:
+      portal:
+        condition: service_healthy
