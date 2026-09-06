@@ -11,17 +11,18 @@ const config = loadConfig();
 const coordinator = new CoordinatorClient(config);
 const app = Fastify({ logger: true, trustProxy: true, bodyLimit: 64 * 1024 });
 
+type Page<T> = { items: T[]; nextCursor: string | null };
+type AgentJson = { id: string; name: string; state: string; lastSeen: string | null; version: string | null; build: string | null; gitCommit: string | null; os: string | null; arch: string | null; artifactSha256: string | null; protocolVersion: number | null; schemaVersion: number | null; features: string | null; certificateSha256: string | null; enrolledAt: string | null; lastSequence: number };
+type FindingJson = { id: string; agentId: string; agentName: string; host: string; port: number; trust: string | null; performance: string | null; count: number; status: string | null; firstSeen: string | null; lastSeen: string | null; incidentId: string | null };
+type CertificateJson = { agentId: string; agentName: string; agentStatus: string; state: string; fingerprint: string | null; notBefore: string | null; notAfter: string | null; rotatedAt: string | null };
+type UpgradeJson = { id: string; agentId: string; fromVersion: string | null; fromBuild: string | null; targetVersion: string; targetBuild: string; status: string; os: string; arch: string; sourceType: string; sourceRef: string; requestedAt: string; failureCode: string | null; failureMessage: string | null };
+type FleetSummary = { agents: { total: number; online: number; offline: number; linux: number; windows: number }; findings: Record<string, number>; certificates: Record<string, number> };
+
 await app.register(helmet, {
   contentSecurityPolicy: {
     directives: {
-      defaultSrc: ["'self'"],
-      scriptSrc: ["'self'"],
-      styleSrc: ["'self'"],
-      imgSrc: ["'self'", 'data:'],
-      connectSrc: ["'self'"],
-      frameAncestors: ["'none'"],
-      baseUri: ["'self'"],
-      formAction: ["'self'"]
+      defaultSrc: ["'self'"], scriptSrc: ["'self'"], styleSrc: ["'self'"], imgSrc: ["'self'", 'data:'],
+      connectSrc: ["'self'"], frameAncestors: ["'none'"], baseUri: ["'self'"], formAction: ["'self'"]
     }
   },
   crossOriginEmbedderPolicy: false
@@ -29,9 +30,7 @@ await app.register(helmet, {
 
 app.addHook('onRequest', async (request, reply) => {
   if (request.url.startsWith('/portal-api/') && ['POST', 'PUT', 'PATCH', 'DELETE'].includes(request.method)) {
-    if (request.headers['x-neta-portal-request'] !== '1') {
-      return reply.code(400).send({ error: 'missing portal request marker' });
-    }
+    if (request.headers['x-neta-portal-request'] !== '1') return reply.code(400).send({ error: 'missing portal request marker' });
   }
 });
 
@@ -39,113 +38,107 @@ function clamp(value: unknown, min: number, max: number, fallback: number): numb
   const parsed = Number(value);
   return Number.isFinite(parsed) ? Math.max(min, Math.min(max, Math.trunc(parsed))) : fallback;
 }
-
-function contains(value: string, search?: string): boolean {
-  return !search || value.toLowerCase().includes(search.toLowerCase());
+function platform(os?: string | null, arch?: string | null): string { return os ? (arch ? `${os}/${arch}` : os) : '-'; }
+function build(version?: string | null, id?: string | null): string { return version ? (id ? `${version}/${id}` : version) : '-'; }
+function remaining(notAfter?: string | null): string {
+  if (!notAfter) return '-';
+  const ms = new Date(notAfter).getTime() - Date.now();
+  if (!Number.isFinite(ms) || ms <= 0) return 'expired';
+  const hours = Math.floor(ms / 3_600_000);
+  return hours < 48 ? `${hours} hr` : `${Math.floor(hours / 24)} day`;
+}
+function paramsFrom(query: Record<string, string | undefined>, keys: string[], defaultLimit = 50): URLSearchParams {
+  const params = new URLSearchParams();
+  params.set('limit', String(clamp(query.limit, 1, 100, defaultLimit)));
+  for (const key of keys) if (query[key]) params.set(key, query[key]!);
+  return params;
 }
 
 app.get('/portal-api/health', async () => ({ status: 'UP' }));
 
 app.get('/portal-api/system', async () => {
-  const raw = await coordinator.request('/actuator/health');
-  let health: unknown = raw;
-  try { health = JSON.parse(raw); } catch { /* keep coordinator response as text */ }
-  return {
-    portal: { status: 'UP', version: '0.1.0' },
-    coordinator: health,
-    coordinatorUrl: config.coordinatorUrl.origin,
-    mtlsConfigured: Boolean(config.cert && config.key),
-    legacyOperatorApi: config.legacyOperatorApi
-  };
+  const health = await coordinator.requestJson<unknown>('/actuator/health');
+  return { portal: { status: 'UP', version: '0.1.1' }, coordinator: health, coordinatorUrl: config.coordinatorUrl.origin, mtlsConfigured: Boolean(config.cert && config.key), legacyOperatorApi: config.legacyOperatorApi };
 });
 
 app.get('/portal-api/agents', async (request) => {
-  if (!config.legacyOperatorApi) throw new CoordinatorError('JSON agent API is not available in this portal version', 501, '');
   const query = request.query as Record<string, string | undefined>;
-  const limit = clamp(query.limit, 1, 100, 50);
-  const offset = clamp(query.offset, 0, 1_000_000, 0);
-  const raw = await coordinator.request('/api/v1/operator/agents');
-  let items = parseAgents(raw);
-  if (query.search) items = items.filter((a) => contains(a.name, query.search) || contains(a.id, query.search));
-  if (query.status) items = items.filter((a) => a.state.toLowerCase() === query.status!.toLowerCase());
-  if (query.platform) items = items.filter((a) => a.platform.toLowerCase().startsWith(query.platform!.toLowerCase()));
-  const total = items.length;
-  return { items: items.slice(offset, offset + limit), total, limit, offset, compatibilityMode: true };
+  if (config.legacyOperatorApi) {
+    const raw = await coordinator.request('/api/v1/operator/agents');
+    let items = parseAgents(raw);
+    if (query.search) items = items.filter((a) => `${a.name} ${a.id}`.toLowerCase().includes(query.search!.toLowerCase()));
+    if (query.status) items = items.filter((a) => a.state.toLowerCase() === query.status!.toLowerCase());
+    if (query.platform) items = items.filter((a) => a.platform.toLowerCase().startsWith(query.platform!.toLowerCase()));
+    return { items: items.slice(0, clamp(query.limit, 1, 100, 50)), nextCursor: null, compatibilityMode: true };
+  }
+  const params = paramsFrom(query, ['cursor', 'search', 'status', 'platform']);
+  const page = await coordinator.requestJson<Page<AgentJson>>(`/api/v1/agents?${params}`);
+  return {
+    items: page.items.map((a) => ({ id: a.id, name: a.name, state: a.state, version: a.version ?? '-', build: a.build ?? '-', platform: platform(a.os, a.arch), lastSeen: a.lastSeen ?? 'never' })),
+    nextCursor: page.nextCursor,
+    compatibilityMode: false
+  };
 });
 
 app.get('/portal-api/agents/:agent', async (request) => {
   const { agent } = request.params as { agent: string };
-  const raw = await coordinator.request(`/api/v1/operator/agent-admin?agent=${encodeURIComponent(agent)}`);
-  return { agent, details: parseKeyValues(raw), raw };
+  if (config.legacyOperatorApi) {
+    const raw = await coordinator.request(`/api/v1/operator/agent-admin?agent=${encodeURIComponent(agent)}`);
+    return { agent, details: parseKeyValues(raw), raw, compatibilityMode: true };
+  }
+  const a = await coordinator.requestJson<AgentJson>(`/api/v1/agents/${encodeURIComponent(agent)}`);
+  return { agent: a.id, compatibilityMode: false, details: { agent: a.name, agent_id: a.id, enrollment_state: a.state, enrolled: a.enrolledAt ?? '-', last_seen: a.lastSeen ?? 'never', last_sequence: String(a.lastSequence), version: a.version ?? '-', build_id: a.build ?? '-', git_commit: a.gitCommit ?? '-', platform: platform(a.os, a.arch), artifact_sha_256: a.artifactSha256 ?? '-', protocol_version: a.protocolVersion == null ? '-' : String(a.protocolVersion), schema_version: a.schemaVersion == null ? '-' : String(a.schemaVersion), features: a.features ?? '-', certificate_sha_256: a.certificateSha256 ?? '-' } };
 });
 
 app.get('/portal-api/findings', async (request) => {
   const query = request.query as Record<string, string | undefined>;
-  const params = new URLSearchParams();
-  params.set('limit', String(clamp(query.limit, 1, 100, 50)));
-  params.set('offset', String(clamp(query.offset, 0, 1_000_000, 0)));
-  for (const key of ['agent', 'trust', 'performance', 'status', 'target', 'since', 'sort', 'order']) {
-    if (query[key]) params.set(key, query[key]!);
+  if (config.legacyOperatorApi) {
+    const params = paramsFrom(query, ['agent', 'trust', 'performance', 'status', 'target'], 50);
+    params.set('offset', '0');
+    return { ...parseFindingSearch(await coordinator.request(`/api/v1/operator/finding-search?${params}`)), nextCursor: null, compatibilityMode: true };
   }
-  const raw = await coordinator.request(`/api/v1/operator/finding-search?${params}`);
-  return parseFindingSearch(raw);
+  const params = paramsFrom(query, ['cursor', 'agent', 'trust', 'performance', 'status', 'target']);
+  const page = await coordinator.requestJson<Page<FindingJson>>(`/api/v1/findings?${params}`);
+  return { items: page.items.map((f) => ({ id: f.id, lastSeen: f.lastSeen ?? '-', agent: f.agentName, target: `${f.host}:${f.port}`, trust: f.trust ?? '-', performance: f.performance ?? '-', count: f.count, status: f.status ?? '-', incident: f.incidentId ?? '-' })), nextCursor: page.nextCursor, compatibilityMode: false };
 });
 
 app.get('/portal-api/upgrades', async (request) => {
   const query = request.query as Record<string, string | undefined>;
-  const params = new URLSearchParams();
-  params.set('limit', String(clamp(query.limit, 1, 100, 20)));
-  if (query.agent) params.set('agent', query.agent);
-  const raw = await coordinator.request(`/api/v1/operator/upgrades?${params}`);
-  return { items: parseUpgrades(raw) };
+  if (config.legacyOperatorApi) {
+    const params = paramsFrom(query, ['agent'], 20);
+    return { items: parseUpgrades(await coordinator.request(`/api/v1/operator/upgrades?${params}`)), nextCursor: null, compatibilityMode: true };
+  }
+  const params = paramsFrom(query, ['cursor', 'agent', 'status'], 50);
+  const page = await coordinator.requestJson<Page<UpgradeJson>>(`/api/v1/upgrades?${params}`);
+  return { items: page.items.map((u) => ({ id: u.id, agent: u.agentId, from: build(u.fromVersion, u.fromBuild), target: build(u.targetVersion, u.targetBuild), status: u.status, platform: platform(u.os, u.arch), source: `${u.sourceType.toLowerCase()} ${u.sourceRef}`, requested: u.requestedAt })), nextCursor: page.nextCursor, compatibilityMode: false };
 });
 
-app.get('/portal-api/certificates', async () => {
-  const raw = await coordinator.request('/api/v1/operator/certificates');
-  return { items: parseCertificates(raw) };
+app.get('/portal-api/certificates', async (request) => {
+  const query = request.query as Record<string, string | undefined>;
+  if (config.legacyOperatorApi) return { items: parseCertificates(await coordinator.request('/api/v1/operator/certificates')), nextCursor: null, compatibilityMode: true };
+  const params = paramsFrom(query, ['cursor', 'state', 'search']);
+  const page = await coordinator.requestJson<Page<CertificateJson>>(`/api/v1/certificates?${params}`);
+  return { items: page.items.map((c) => ({ agent: c.agentName, state: c.state, remaining: remaining(c.notAfter), notAfter: c.notAfter ?? '-', fingerprint: c.fingerprint ?? '-' })), nextCursor: page.nextCursor, compatibilityMode: false };
 });
 
 app.get('/portal-api/dashboard', async () => {
-  const [agentText, findingText, certificateText, healthText] = await Promise.all([
-    coordinator.request('/api/v1/operator/agents'),
-    coordinator.request('/api/v1/operator/finding-summary'),
-    coordinator.request('/api/v1/operator/certificate-summary'),
-    coordinator.request('/actuator/health')
-  ]);
-  const agents = parseAgents(agentText);
-  const findingMetrics = parseMetricBlock(findingText);
-  const certificateMetrics = parseMetricBlock(certificateText);
-  const online = agents.filter((a) => a.state === 'ACTIVE').length;
-  const linux = agents.filter((a) => a.platform.toLowerCase().startsWith('linux')).length;
-  const windows = agents.filter((a) => a.platform.toLowerCase().startsWith('windows')).length;
-  let coordinatorStatus = 'UNKNOWN';
-  try { coordinatorStatus = JSON.parse(healthText).status ?? 'UNKNOWN'; } catch { coordinatorStatus = healthText.trim() || 'UNKNOWN'; }
-  return {
-    agents: { total: agents.length, online, offline: Math.max(0, agents.length - online), linux, windows },
-    findings: findingMetrics,
-    certificates: certificateMetrics,
-    coordinator: { status: coordinatorStatus },
-    compatibilityMode: true
-  };
+  if (config.legacyOperatorApi) {
+    const [agentText, findingText, certificateText, healthText] = await Promise.all([coordinator.request('/api/v1/operator/agents'), coordinator.request('/api/v1/operator/finding-summary'), coordinator.request('/api/v1/operator/certificate-summary'), coordinator.request('/actuator/health')]);
+    const agents = parseAgents(agentText); const findingMetrics = parseMetricBlock(findingText); const certificateMetrics = parseMetricBlock(certificateText);
+    let coordinatorStatus = 'UNKNOWN'; try { coordinatorStatus = JSON.parse(healthText).status ?? 'UNKNOWN'; } catch { coordinatorStatus = healthText.trim() || 'UNKNOWN'; }
+    return { agents: { total: agents.length, online: agents.filter((a) => a.state === 'ACTIVE').length, offline: agents.filter((a) => a.state !== 'ACTIVE').length, linux: agents.filter((a) => a.platform.toLowerCase().startsWith('linux')).length, windows: agents.filter((a) => a.platform.toLowerCase().startsWith('windows')).length }, findings: findingMetrics, certificates: certificateMetrics, coordinator: { status: coordinatorStatus }, compatibilityMode: true };
+  }
+  const [summary, health] = await Promise.all([coordinator.requestJson<FleetSummary>('/api/v1/fleet/summary'), coordinator.requestJson<{ status?: string }>('/actuator/health')]);
+  return { ...summary, coordinator: { status: health.status ?? 'UNKNOWN' }, compatibilityMode: false };
 });
 
 app.setErrorHandler((error, _request, reply) => {
-  if (error instanceof CoordinatorError) {
-    return reply.code(error.statusCode >= 400 && error.statusCode < 600 ? error.statusCode : 502).send({
-      error: error.message,
-      coordinatorResponse: error.body || undefined
-    });
-  }
-  app.log.error(error);
-  return reply.code(502).send({ error: 'Portal could not complete the coordinator request' });
+  if (error instanceof CoordinatorError) return reply.code(error.statusCode >= 400 && error.statusCode < 600 ? error.statusCode : 502).send({ error: error.message, coordinatorResponse: error.body || undefined });
+  app.log.error(error); return reply.code(502).send({ error: 'Portal could not complete the coordinator request' });
 });
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const dist = path.resolve(__dirname, '../dist');
 await app.register(fastifyStatic, { root: dist, wildcard: false });
-app.setNotFoundHandler((request, reply) => {
-  if (request.url.startsWith('/portal-api/')) return reply.code(404).send({ error: 'not found' });
-  return reply.sendFile('index.html');
-});
-
+app.setNotFoundHandler((request, reply) => request.url.startsWith('/portal-api/') ? reply.code(404).send({ error: 'not found' }) : reply.sendFile('index.html'));
 await app.listen({ host: config.host, port: config.port });
