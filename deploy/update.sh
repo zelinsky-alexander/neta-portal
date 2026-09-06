@@ -23,7 +23,8 @@ done
 compose=(docker compose --env-file .env -f docker-compose.yml)
 
 info "Updating NETA Portal..."
-"${compose[@]}" up -d --build portal
+info "The tunnel service is intentionally left untouched so a Quick Tunnel URL is not rotated during Portal deployments."
+"${compose[@]}" up -d --build --no-deps portal
 
 info "Waiting for Portal container health..."
 health=""
@@ -63,4 +64,5 @@ if ! curl -fsS --connect-timeout 2 --max-time 5 http://127.0.0.1:8080/portal-api
 fi
 
 info "Portal deployment verified."
+info "Tunnel service was not recreated."
 info "Run: ./deploy/health-check.sh"
