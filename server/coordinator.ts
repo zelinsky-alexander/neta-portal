@@ -1,0 +1,67 @@
+import http from 'node:http';
+import https from 'node:https';
+import type { PortalConfig } from './config.js';
+
+export class CoordinatorError extends Error {
+  constructor(
+    message: string,
+    public readonly statusCode: number,
+    public readonly body: string
+  ) {
+    super(message);
+  }
+}
+
+export class CoordinatorClient {
+  constructor(private readonly config: PortalConfig) {}
+
+  async request(path: string, init: { method?: 'GET' | 'POST'; body?: URLSearchParams; admin?: boolean } = {}): Promise<string> {
+    const target = new URL(path, this.config.coordinatorUrl);
+    const body = init.body?.toString();
+    const headers: Record<string, string> = {
+      accept: 'application/json, text/plain;q=0.9',
+      'user-agent': 'neta-portal/0.1'
+    };
+    if (body) {
+      headers['content-type'] = 'application/x-www-form-urlencoded';
+      headers['content-length'] = Buffer.byteLength(body).toString();
+    }
+    if (init.admin) {
+      if (!this.config.adminToken) throw new CoordinatorError('Coordinator admin operations are not configured', 503, '');
+      headers['x-neta-admin-token'] = this.config.adminToken;
+    }
+
+    return new Promise((resolve, reject) => {
+      const isHttps = target.protocol === 'https:';
+      const requestFn = isHttps ? https.request : http.request;
+      const req = requestFn(target, {
+        method: init.method ?? 'GET',
+        headers,
+        timeout: this.config.timeoutMs,
+        ...(isHttps ? {
+          ca: this.config.ca,
+          cert: this.config.cert,
+          key: this.config.key,
+          rejectUnauthorized: true,
+          minVersion: 'TLSv1.2'
+        } : {})
+      }, (res) => {
+        const chunks: Buffer[] = [];
+        res.on('data', (chunk) => chunks.push(Buffer.from(chunk)));
+        res.on('end', () => {
+          const responseBody = Buffer.concat(chunks).toString('utf8');
+          const status = res.statusCode ?? 502;
+          if (status < 200 || status >= 300) {
+            reject(new CoordinatorError(`Coordinator returned HTTP ${status}`, status, responseBody));
+            return;
+          }
+          resolve(responseBody);
+        });
+      });
+      req.on('timeout', () => req.destroy(new Error('Coordinator request timed out')));
+      req.on('error', reject);
+      if (body) req.write(body);
+      req.end();
+    });
+  }
+}
