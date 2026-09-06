@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import Fastify from 'fastify';
@@ -6,6 +7,7 @@ import fastifyStatic from '@fastify/static';
 import { loadConfig } from './config.js';
 import { CoordinatorClient, CoordinatorError } from './coordinator.js';
 import { parseAgents, parseCertificates, parseFindingSearch, parseKeyValues, parseMetricBlock, parseUpgrades } from './parsers.js';
+import { requireIdempotencyKey, validateReason, validateRotation, validateUpgrade } from './mutations.js';
 
 const config = loadConfig();
 const coordinator = new CoordinatorClient(config);
@@ -29,8 +31,16 @@ await app.register(helmet, {
 });
 
 app.addHook('onRequest', async (request, reply) => {
-  if (request.url.startsWith('/portal-api/') && ['POST', 'PUT', 'PATCH', 'DELETE'].includes(request.method)) {
-    if (request.headers['x-neta-portal-request'] !== '1') return reply.code(400).send({ error: 'missing portal request marker' });
+  if (!request.url.startsWith('/portal-api/') || !['POST', 'PUT', 'PATCH', 'DELETE'].includes(request.method)) return;
+  if (request.headers['x-neta-portal-request'] !== '1') return reply.code(400).send({ error: 'missing portal request marker' });
+  const origin = request.headers.origin;
+  const host = request.headers['x-forwarded-host'] ?? request.headers.host;
+  if (origin && host) {
+    try {
+      if (new URL(origin).host !== String(host).split(',')[0].trim()) return reply.code(403).send({ error: 'cross-origin mutation rejected' });
+    } catch {
+      return reply.code(400).send({ error: 'invalid Origin header' });
+    }
   }
 });
 
@@ -53,12 +63,30 @@ function paramsFrom(query: Record<string, string | undefined>, keys: string[], d
   for (const key of keys) if (query[key]) params.set(key, query[key]!);
   return params;
 }
+function validation<T>(fn: () => T): T {
+  try { return fn(); }
+  catch (error) { throw new CoordinatorError(error instanceof Error ? error.message : 'invalid request', 400, ''); }
+}
+function operationHeaders(request: { headers: Record<string, unknown> }) {
+  return {
+    idempotencyKey: validation(() => requireIdempotencyKey(request.headers['idempotency-key'])),
+    requestId: randomUUID()
+  };
+}
 
 app.get('/portal-api/health', async () => ({ status: 'UP' }));
 
 app.get('/portal-api/system', async () => {
   const health = await coordinator.requestJson<unknown>('/actuator/health');
-  return { portal: { status: 'UP', version: '0.1.1' }, coordinator: health, coordinatorUrl: config.coordinatorUrl.origin, mtlsConfigured: Boolean(config.cert && config.key), legacyOperatorApi: config.legacyOperatorApi };
+  return {
+    portal: { status: 'UP', version: '0.2.0' },
+    coordinator: health,
+    coordinatorUrl: config.coordinatorUrl.origin,
+    mtlsConfigured: Boolean(config.cert && config.key),
+    adminConfigured: Boolean(config.adminToken),
+    legacyOperatorApi: config.legacyOperatorApi,
+    idempotencyEnforcedByCoordinator: false
+  };
 });
 
 app.get('/portal-api/agents', async (request) => {
@@ -113,12 +141,48 @@ app.get('/portal-api/upgrades', async (request) => {
   return { items: page.items.map((u) => ({ id: u.id, agent: u.agentId, from: build(u.fromVersion, u.fromBuild), target: build(u.targetVersion, u.targetBuild), status: u.status, platform: platform(u.os, u.arch), source: `${u.sourceType.toLowerCase()} ${u.sourceRef}`, requested: u.requestedAt })), nextCursor: page.nextCursor, compatibilityMode: false };
 });
 
+app.post('/portal-api/upgrades/request', async (request, reply) => {
+  const body = validation(() => validateUpgrade(request.body));
+  const ids = operationHeaders(request as unknown as { headers: Record<string, unknown> });
+  const params = new URLSearchParams({ agent: body.agent, source: body.source, ref: body.ref, allowDevelopment: String(body.allowDevelopment) });
+  const coordinatorResponse = await coordinator.request('/api/v1/operator/agent-upgrade', { method: 'POST', body: params, admin: true, ...ids });
+  reply.header('x-request-id', ids.requestId);
+  return reply.code(202).send({ accepted: true, operation: 'AGENT_UPGRADE_REQUESTED', requestId: ids.requestId, idempotencyKey: ids.idempotencyKey, idempotencyEnforcedByCoordinator: false, coordinatorResponse });
+});
+
 app.get('/portal-api/certificates', async (request) => {
   const query = request.query as Record<string, string | undefined>;
-  if (config.legacyOperatorApi) return { items: parseCertificates(await coordinator.request('/api/v1/operator/certificates')), nextCursor: null, compatibilityMode: true };
+  if (config.legacyOperatorApi) return { items: parseCertificates(await coordinator.request('/api/v1/operator/certificates')).map((c) => ({ ...c, agentId: c.agent })), nextCursor: null, compatibilityMode: true };
   const params = paramsFrom(query, ['cursor', 'state', 'search']);
   const page = await coordinator.requestJson<Page<CertificateJson>>(`/api/v1/certificates?${params}`);
-  return { items: page.items.map((c) => ({ agent: c.agentName, state: c.state, remaining: remaining(c.notAfter), notAfter: c.notAfter ?? '-', fingerprint: c.fingerprint ?? '-' })), nextCursor: page.nextCursor, compatibilityMode: false };
+  return { items: page.items.map((c) => ({ agentId: c.agentId, agent: c.agentName, agentStatus: c.agentStatus, state: c.state, remaining: remaining(c.notAfter), notAfter: c.notAfter ?? '-', fingerprint: c.fingerprint ?? '-' })), nextCursor: page.nextCursor, compatibilityMode: false };
+});
+
+app.post('/portal-api/agents/:agent/revoke', async (request, reply) => {
+  const { agent } = request.params as { agent: string };
+  const body = validation(() => validateReason(request.body));
+  const ids = operationHeaders(request as unknown as { headers: Record<string, unknown> });
+  const coordinatorResponse = await coordinator.request('/api/v1/operator/agent-revoke', { method: 'POST', body: new URLSearchParams({ agent, reason: body.reason }), admin: true, ...ids });
+  reply.header('x-request-id', ids.requestId);
+  return { accepted: true, operation: 'AGENT_REVOKED', requestId: ids.requestId, idempotencyKey: ids.idempotencyKey, idempotencyEnforcedByCoordinator: false, coordinatorResponse };
+});
+
+app.post('/portal-api/agents/:agent/reactivate', async (request, reply) => {
+  const { agent } = request.params as { agent: string };
+  const body = validation(() => validateReason(request.body));
+  const ids = operationHeaders(request as unknown as { headers: Record<string, unknown> });
+  const coordinatorResponse = await coordinator.request('/api/v1/operator/agent-reactivate', { method: 'POST', body: new URLSearchParams({ agent, reason: body.reason }), admin: true, ...ids });
+  reply.header('x-request-id', ids.requestId);
+  return { accepted: true, operation: 'AGENT_REACTIVATED', requestId: ids.requestId, idempotencyKey: ids.idempotencyKey, idempotencyEnforcedByCoordinator: false, coordinatorResponse };
+});
+
+app.post('/portal-api/agents/:agent/certificate/rotate', async (request, reply) => {
+  const { agent } = request.params as { agent: string };
+  const body = validation(() => validateRotation(request.body));
+  const ids = operationHeaders(request as unknown as { headers: Record<string, unknown> });
+  const certificateChainPem = await coordinator.request('/api/v1/operator/certificate-rotate', { method: 'POST', body: new URLSearchParams({ agent, reason: body.reason, csr: body.csr }), admin: true, ...ids });
+  reply.header('x-request-id', ids.requestId);
+  return { accepted: true, operation: 'AGENT_CERTIFICATE_ROTATED', requestId: ids.requestId, idempotencyKey: ids.idempotencyKey, idempotencyEnforcedByCoordinator: false, certificateChainPem };
 });
 
 app.get('/portal-api/dashboard', async () => {
