@@ -1,6 +1,7 @@
 import http from 'node:http';
 import https from 'node:https';
 import type { PortalConfig } from './config.js';
+import type { PortalSession } from './auth.js';
 
 export class CoordinatorError extends Error {
   constructor(
@@ -18,6 +19,7 @@ type RequestInit = {
   admin?: boolean;
   idempotencyKey?: string;
   requestId?: string;
+  actor?: PortalSession;
 };
 
 export class CoordinatorClient {
@@ -28,7 +30,7 @@ export class CoordinatorClient {
     const body = init.body?.toString();
     const headers: Record<string, string> = {
       accept: 'application/json, text/plain;q=0.9',
-      'user-agent': 'neta-portal/0.2.0'
+      'user-agent': 'neta-portal/0.3.0'
     };
     if (body) {
       headers['content-type'] = 'application/x-www-form-urlencoded';
@@ -36,6 +38,13 @@ export class CoordinatorClient {
     }
     if (init.idempotencyKey) headers['idempotency-key'] = init.idempotencyKey;
     if (init.requestId) headers['x-request-id'] = init.requestId;
+    if (init.actor) {
+      if (!this.config.portalServiceToken) throw new CoordinatorError('Coordinator portal service authorization is not configured', 503, '');
+      headers['x-neta-portal-service-token'] = this.config.portalServiceToken;
+      headers['x-neta-portal-service'] = this.config.portalServiceName;
+      headers['x-neta-actor'] = init.actor.sub;
+      headers['x-neta-actor-role'] = init.actor.role;
+    }
     if (init.admin) {
       if (!this.config.adminToken) throw new CoordinatorError('Coordinator admin operations are not configured', 503, '');
       headers['x-neta-admin-token'] = this.config.adminToken;
