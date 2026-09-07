@@ -1,6 +1,15 @@
 import { describe, expect, it } from 'vitest';
 import { parseAgents, parseFindingSearch, parseMetricBlock } from './parsers.js';
 
+function findingLine(values: string[]): string {
+  const widths = [10,20,27,28,9,10,20,5,8];
+  return values.map((value, index) => {
+    if (index === values.length - 1) return value;
+    const width = widths[index];
+    return index === 7 ? value.padStart(width) : value.padEnd(width);
+  }).join(' ');
+}
+
 describe('operator text compatibility parsers', () => {
   it('parses agents without depending on exact column widths', () => {
     const text = `AGENT                    STATE      VERSION      BUILD            PLATFORM           LAST SEEN    AGENT ID\n----------------------------------------------------------------------------------------------------------------------\nnode-a                   ACTIVE     0.4.1        build-1          linux/x86_64        4 sec        agent-1\n`;
@@ -16,7 +25,9 @@ describe('operator text compatibility parsers', () => {
   });
 
   it('parses type-aware finding assessment rows', () => {
-    const text = `Findings matched: 1  showing: 1  offset: 0\n\nLAST SEEN  AGENT                TARGET                      TYPE                         SEVERITY  CONFIDENCE ASSESSMENT           COUNT STATUS   INCIDENT\n--------------------------------------------------------------------------------------------------------------------------------------------------------------------------\n4 sec      node-a               127.0.0.1:18080            PERIODIC_OUTBOUND_CONNECTION LOW       1.00       INTENT_UNKNOWN            1 ACTIVE   incident-1\n`;
+    const header = findingLine(['LAST SEEN','AGENT','TARGET','TYPE','SEVERITY','CONFIDENCE','ASSESSMENT','COUNT','STATUS','INCIDENT']);
+    const row = findingLine(['4 sec','node-a','127.0.0.1:18080','PERIODIC_OUTBOUND_CONNECTION','LOW','1.00','INTENT_UNKNOWN','1','ACTIVE','incident-1']);
+    const text = `Findings matched: 1  showing: 1  offset: 0\n\n${header}\n${'-'.repeat(header.length)}\n${row}\n`;
     const parsed = parseFindingSearch(text);
     expect(parsed.total).toBe(1);
     expect(parsed.items[0]).toMatchObject({
