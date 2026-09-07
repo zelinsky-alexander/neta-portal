@@ -16,7 +16,7 @@ const app = Fastify({ logger: true, trustProxy: true, bodyLimit: 64 * 1024 });
 
 type Page<T> = { items: T[]; nextCursor: string | null };
 type AgentJson = { id: string; name: string; state: string; lastSeen: string | null; version: string | null; build: string | null; gitCommit: string | null; os: string | null; arch: string | null; artifactSha256: string | null; protocolVersion: number | null; schemaVersion: number | null; features: string | null; certificateSha256: string | null; enrolledAt: string | null; lastSequence: number };
-type FindingJson = { id: string; agentId: string; agentName: string; host: string; port: number; type: string | null; severity: string | null; trust: string | null; performance: string | null; count: number; status: string | null; firstSeen: string | null; lastSeen: string | null; incidentId: string | null };
+type FindingJson = { id: string; agentId: string; agentName: string; host: string; port: number; type: string | null; severity: string | null; confidence: string | null; assessment: string | null; trust: string | null; performance: string | null; count: number; status: string | null; firstSeen: string | null; lastSeen: string | null; incidentId: string | null };
 type CertificateJson = { agentId: string; agentName: string; agentStatus: string; state: string; fingerprint: string | null; notBefore: string | null; notAfter: string | null; rotatedAt: string | null };
 type UpgradeJson = { id: string; agentId: string; fromVersion: string | null; fromBuild: string | null; targetVersion: string; targetBuild: string; status: string; os: string; arch: string; sourceType: string; sourceRef: string; requestedAt: string; failureCode: string | null; failureMessage: string | null };
 type FleetSummary = { agents: { total: number; online: number; offline: number; linux: number; windows: number }; findings: Record<string, number>; certificates: Record<string, number> };
@@ -163,7 +163,7 @@ app.get('/portal-api/findings', async (request) => {
   const actor=currentSession(request); const query=request.query as Record<string,string|undefined>;
   if(config.legacyOperatorApi){const params=paramsFrom(query,['agent','trust','performance','status','target'],50);params.set('offset','0');return {...parseFindingSearch(await coordinator.request(`/api/v1/operator/finding-search?${params}`)),nextCursor:null,compatibilityMode:true};}
   const params=paramsFrom(query,['cursor','agent','trust','performance','status','target']); const page=await coordinator.requestJson<Page<FindingJson>>(`/api/v1/findings?${params}`,{actor});
-  return {items:page.items.map((f)=>({id:f.id,lastSeen:f.lastSeen??'-',agent:f.agentName,target:`${f.host}:${f.port}`,type:f.type??'-',severity:f.severity??'-',trust:f.trust??'-',count:f.count,status:f.status??'-',incident:f.incidentId??'-'})),nextCursor:page.nextCursor,compatibilityMode:false};
+  return {items:page.items.map((f)=>({id:f.id,lastSeen:f.lastSeen??'-',agent:f.agentName,target:`${f.host}:${f.port}`,type:f.type??'-',severity:f.severity??'-',confidence:f.confidence??'-',assessment:f.assessment??'-',count:f.count,status:f.status??'-',incident:f.incidentId??'-'})),nextCursor:page.nextCursor,compatibilityMode:false};
 });
 
 app.get('/portal-api/upgrades', async (request) => {
