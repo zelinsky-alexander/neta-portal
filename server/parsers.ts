@@ -63,33 +63,40 @@ function legacyAssessment(type: string, trust: string): string {
   return 'INTENT_UNKNOWN';
 }
 
-function findingFromColumns(c: string[]): FindingSummary | undefined {
-  // Current table: LAST SEEN AGENT TARGET TYPE SEVERITY CONFIDENCE ASSESSMENT COUNT STATUS INCIDENT
-  if (c.length >= 10) {
+function currentFinding(c: string[]): FindingSummary | undefined {
+  if (c.length < 10) return undefined;
+  return {
+    id: `${c[9]}:${c[0]}:${c[2]}:${c[3]}`,
+    lastSeen: c[0], agent: c[1], target: c[2], type: c[3], severity: c[4], confidence: c[5], assessment: c[6],
+    count: Number(c[7]), status: c[8], incident: c[9]
+  };
+}
+
+function previousBehaviorFinding(c: string[]): FindingSummary | undefined {
+  if (c.length < 10) return undefined;
+  return {
+    id: c[9],
+    lastSeen: c[0], agent: c[1], target: c[2], type: c[3], severity: c[4], confidence: '-', assessment: legacyAssessment(c[3], c[5]),
+    count: Number(c[6]), status: c[7], incident: c[8]
+  };
+}
+
+function legacyConnectionFinding(c: string[]): FindingSummary | undefined {
+  if (c.length >= 9) {
     return {
-      id: `${c[9]}:${c[0]}:${c[2]}:${c[3]}`,
-      lastSeen: c[0], agent: c[1], target: c[2], type: c[3], severity: c[4], confidence: c[5], assessment: c[6],
-      count: Number(c[7]), status: c[8], incident: c[9]
+      id: c[8],
+      lastSeen: c[0], agent: c[1], target: c[2], type: 'CONNECTION_ASSURANCE', severity: '-', confidence: '-', assessment: `PEER_${c[3] || 'UNKNOWN'}`,
+      count: Number(c[5]), status: c[6], incident: c[7]
     };
   }
-  // Previous behavior-aware table: LAST SEEN AGENT TARGET TYPE SEVERITY TRUST COUNT STATUS INCIDENT FINDING
-  if (c.length === 9) {
-    return {
-      id: `${c[8]}:${c[0]}:${c[2]}:${c[3]}`,
-      lastSeen: c[0], agent: c[1], target: c[2], type: c[3], severity: c[4], confidence: '-', assessment: legacyAssessment(c[3], c[5]),
-      count: Number(c[6]), status: c[7], incident: c[8]
-    };
-  }
-  // Older connection-assurance table without type/severity.
-  if (c.length >= 8) {
+  if (c.length === 8) {
     const countStatus = c[5].trim().split(/\s+/);
-    if (countStatus.length === 2) {
-      return {
-        id: `${c[7]}:${c[0]}:${c[2]}`,
-        lastSeen: c[0], agent: c[1], target: c[2], type: 'CONNECTION_ASSURANCE', severity: '-', confidence: '-', assessment: `PEER_${c[3] || 'UNKNOWN'}`,
-        count: Number(countStatus[0]), status: countStatus[1], incident: c[6]
-      };
-    }
+    if (countStatus.length !== 2) return undefined;
+    return {
+      id: c[7],
+      lastSeen: c[0], agent: c[1], target: c[2], type: 'CONNECTION_ASSURANCE', severity: '-', confidence: '-', assessment: `PEER_${c[3] || 'UNKNOWN'}`,
+      count: Number(countStatus[0]), status: countStatus[1], incident: c[6]
+    };
   }
   return undefined;
 }
@@ -99,7 +106,13 @@ export function parseFindingSearch(text: string): { total: number; items: Findin
   const total = Number(lines[0]?.match(/Findings matched:\s*(\d+)/)?.[1] ?? 0);
   const start = lines.findIndex((line) => line.includes('LAST SEEN') && line.includes('INCIDENT'));
   if (start < 0) return { total, items: [] };
-  const items = lines.slice(start + 2).map(columns).map(findingFromColumns).filter((item): item is FindingSummary => Boolean(item));
+  const header = lines[start];
+  const parser = header.includes('CONFIDENCE') && header.includes('ASSESSMENT')
+    ? currentFinding
+    : header.includes('TYPE') && header.includes('SEVERITY')
+      ? previousBehaviorFinding
+      : legacyConnectionFinding;
+  const items = lines.slice(start + 2).map(columns).map(parser).filter((item): item is FindingSummary => Boolean(item));
   return { total, items };
 }
 
