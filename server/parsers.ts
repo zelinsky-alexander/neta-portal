@@ -13,8 +13,9 @@ export type FindingSummary = {
   lastSeen: string;
   agent: string;
   target: string;
+  type: string;
+  severity: string;
   trust: string;
-  performance: string;
   count: number;
   status: string;
   incident: string;
@@ -57,9 +58,16 @@ export function parseAgents(text: string): AgentSummary[] {
 }
 
 function findingFromColumns(c: string[]): FindingSummary | undefined {
+  if (c.length >= 10) {
+    return {
+      lastSeen: c[0], agent: c[1], target: c[2], type: c[3], severity: c[4], trust: c[5],
+      count: Number(c[6]), status: c[7], incident: c[8], id: c[9]
+    };
+  }
+  // Backward compatibility with the pre-behavior-assessment CLI table.
   if (c.length >= 9) {
     return {
-      lastSeen: c[0], agent: c[1], target: c[2], trust: c[3], performance: c[4],
+      lastSeen: c[0], agent: c[1], target: c[2], type: 'CONNECTION_ASSURANCE', severity: '-', trust: c[3],
       count: Number(c[5]), status: c[6], incident: c[7], id: c[8]
     };
   }
@@ -67,7 +75,7 @@ function findingFromColumns(c: string[]): FindingSummary | undefined {
     const countStatus = c[5].trim().split(/\s+/);
     if (countStatus.length !== 2) return undefined;
     return {
-      lastSeen: c[0], agent: c[1], target: c[2], trust: c[3], performance: c[4],
+      lastSeen: c[0], agent: c[1], target: c[2], type: 'CONNECTION_ASSURANCE', severity: '-', trust: c[3],
       count: Number(countStatus[0]), status: countStatus[1], incident: c[6], id: c[7]
     };
   }
