@@ -49,6 +49,15 @@ function columns(line: string): string[] {
   return line.trim().split(/\s{2,}/);
 }
 
+function fixedColumns(header: string, row: string, labels: string[]): string[] | undefined {
+  const starts = labels.map((label) => header.indexOf(label));
+  if (starts.some((start) => start < 0)) return undefined;
+  for (let i = 1; i < starts.length; ++i) {
+    if (starts[i] <= starts[i - 1]) return undefined;
+  }
+  return starts.map((start, i) => row.slice(start, i + 1 < starts.length ? starts[i + 1] : undefined).trim());
+}
+
 export function parseAgents(text: string): AgentSummary[] {
   const lines = dataLines(text);
   const start = lines.findIndex((line) => line.includes('AGENT') && line.includes('STATE') && line.includes('AGENT ID'));
@@ -64,11 +73,13 @@ function legacyAssessment(type: string, trust: string): string {
 }
 
 function currentFinding(c: string[]): FindingSummary | undefined {
-  if (c.length < 10) return undefined;
+  if (c.length < 10 || !c[3] || !c[8]) return undefined;
+  const count = Number(c[7]);
+  if (!Number.isFinite(count)) return undefined;
   return {
     id: `${c[9]}:${c[0]}:${c[2]}:${c[3]}`,
     lastSeen: c[0], agent: c[1], target: c[2], type: c[3], severity: c[4], confidence: c[5], assessment: c[6],
-    count: Number(c[7]), status: c[8], incident: c[9]
+    count, status: c[8], incident: c[9]
   };
 }
 
@@ -107,12 +118,22 @@ export function parseFindingSearch(text: string): { total: number; items: Findin
   const start = lines.findIndex((line) => line.includes('LAST SEEN') && line.includes('INCIDENT'));
   if (start < 0) return { total, items: [] };
   const header = lines[start];
-  const parser = header.includes('CONFIDENCE') && header.includes('ASSESSMENT')
-    ? currentFinding
-    : header.includes('TYPE') && header.includes('SEVERITY')
-      ? previousBehaviorFinding
-      : legacyConnectionFinding;
-  const items = lines.slice(start + 2).map(columns).map(parser).filter((item): item is FindingSummary => Boolean(item));
+  const rows = lines.slice(start + 2);
+
+  if (header.includes('CONFIDENCE') && header.includes('ASSESSMENT')) {
+    const labels = ['LAST SEEN','AGENT','TARGET','TYPE','SEVERITY','CONFIDENCE','ASSESSMENT','COUNT','STATUS','INCIDENT'];
+    const items = rows
+      .map((row) => fixedColumns(header, row, labels))
+      .filter((c): c is string[] => Boolean(c))
+      .map(currentFinding)
+      .filter((item): item is FindingSummary => Boolean(item));
+    return { total, items };
+  }
+
+  const parser = header.includes('TYPE') && header.includes('SEVERITY')
+    ? previousBehaviorFinding
+    : legacyConnectionFinding;
+  const items = rows.map(columns).map(parser).filter((item): item is FindingSummary => Boolean(item));
   return { total, items };
 }
 
