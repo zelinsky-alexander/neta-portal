@@ -104,5 +104,16 @@ tbody tr:hover { background: #101d2f; }
 .modal-actions { justify-content: flex-end; margin-bottom: 0; }
 .csr-input { min-height: 180px; }
 .danger-copy { border-left: 3px solid #c34a58; padding: 9px 12px; margin: 12px 0; background: #241318; color: #ffb3ba; font-size: 12px; }
-@media (max-width: 1050px) { .cards { grid-template-columns: repeat(2,1fr); } .shell { grid-template-columns: 190px 1fr; } main { padding: 28px 24px; } }
-@media (max-width: 720px) { .shell { display: block; } aside { position: static; height: auto; padding: 16px; } nav { display: flex; overflow-x: auto; } .aside-footer { display: none; } .brand { padding-bottom: 14px; } main { padding: 22px 14px 40px; } .cards, .split-panel, .details-grid, .form-grid { grid-template-columns: 1fr; } .detail.wide { grid-column: auto; } .toolbar, .row-actions { flex-wrap: wrap; } input, select { min-width: 0; flex: 1; } .checkbox-label { padding-top: 0; } }
+.findings-summary-wrap { display: flex; justify-content: flex-end; margin-top: -78px; margin-bottom: 16px; }
+.findings-summary { width: min(560px, 100%); padding: 15px 18px; display: flex; flex-direction: column; gap: 7px; }
+.findings-severity-line { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
+.findings-severity-line strong { margin-right: 2px; }
+.severity-count { font-weight: 750; }
+.severity-separator { color: #56667b; }
+.severity-critical { color: #ff646f; }
+.severity-high { color: #ff9e4a; }
+.severity-medium { color: #f6d34a; }
+.severity-low, .severity-info { color: #63a7ff; }
+.findings-summary-error { max-width: 560px; margin-left: auto; margin-top: -62px; }
+@media (max-width: 1050px) { .cards { grid-template-columns: repeat(2,1fr); } .shell { grid-template-columns: 190px 1fr; } main { padding: 28px 24px; } .findings-summary-wrap { margin-top: 0; } }
+@media (max-width: 720px) { .shell { display: block; } aside { position: static; height: auto; padding: 16px; } nav { display: flex; overflow-x: auto; } .aside-footer { display: none; } .brand { padding-bottom: 14px; } main { padding: 22px 14px 40px; } .cards, .split-panel, .details-grid, .form-grid { grid-template-columns: 1fr; } .detail.wide { grid-column: auto; } .toolbar, .row-actions { flex-wrap: wrap; } input, select { min-width: 0; flex: 1; } .checkbox-label { padding-top: 0; } .findings-summary-wrap { justify-content: stretch; } .findings-summary { width: 100%; } }
