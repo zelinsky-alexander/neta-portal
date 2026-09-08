@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { parseAgents, parseFindingSearch, parseMetricBlock } from './parsers.js';
 
 function findingLine(values: string[]): string {
-  const widths = [10,20,27,28,9,10,20,5,8];
+  const widths = [10,20,27,32,9,10,20,5,8];
   return values.map((value, index) => {
     if (index === values.length - 1) return value;
     const width = widths[index];
@@ -24,15 +24,25 @@ describe('operator text compatibility parsers', () => {
     expect(parsed.items[0]?.assessment).toBe('PEER_SUSPICIOUS');
   });
 
-  it('parses type-aware finding assessment rows', () => {
+  it('parses type-aware finding assessment rows with TARGET compatibility', () => {
     const header = findingLine(['LAST SEEN','AGENT','TARGET','TYPE','SEVERITY','CONFIDENCE','ASSESSMENT','COUNT','STATUS','INCIDENT']);
     const row = findingLine(['4 sec','node-a','127.0.0.1:18080','PERIODIC_OUTBOUND_CONNECTION','LOW','1.00','INTENT_UNKNOWN','1','ACTIVE','incident-1']);
     const text = `Findings matched: 1  showing: 1  offset: 0\n\n${header}\n${'-'.repeat(header.length)}\n${row}\n`;
     const parsed = parseFindingSearch(text);
     expect(parsed.total).toBe(1);
     expect(parsed.items[0]).toMatchObject({
-      type: 'PERIODIC_OUTBOUND_CONNECTION', severity: 'LOW', confidence: '1.00', assessment: 'INTENT_UNKNOWN',
+      target: '127.0.0.1:18080', type: 'PERIODIC_OUTBOUND_CONNECTION', severity: 'LOW', confidence: '1.00', assessment: 'INTENT_UNKNOWN',
       count: 1, status: 'ACTIVE', incident: 'incident-1'
+    });
+  });
+
+  it('parses process SUBJECT rows without exposing stable process ids', () => {
+    const header = findingLine(['LAST SEEN','AGENT','SUBJECT','TYPE','SEVERITY','CONFIDENCE','ASSESSMENT','COUNT','STATUS','INCIDENT']);
+    const row = findingLine(['4 sec','node-a','neta-agent','PROCESS_UNEXPECTED_ELEVATION','MEDIUM','-','BEHAVIORAL_PATTERN','1','ACTIVE','incident-2']);
+    const text = `Findings matched: 1  showing: 1  offset: 0\n\n${header}\n${'-'.repeat(header.length)}\n${row}\n`;
+    const parsed = parseFindingSearch(text);
+    expect(parsed.items[0]).toMatchObject({
+      target: 'neta-agent', type: 'PROCESS_UNEXPECTED_ELEVATION', severity: 'MEDIUM', assessment: 'BEHAVIORAL_PATTERN'
     });
   });
 
