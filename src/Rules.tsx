@@ -1,0 +1,93 @@
+import { useMemo, useState, type FormEvent } from 'react';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+
+type Role='VIEWER'|'OPERATOR'|'ADMIN';
+type Session={authenticated:boolean;user?:string;role?:Role;csrfToken?:string};
+type Rule={id:string;revision:number;origin:'DEFAULT'|'CUSTOM';engineRuleId:string;name:string;category:string;severity:string;enabled:boolean;parameters:Record<string,unknown>;createdBy:string;createdAt:string};
+type RuleSetSummary={revision:number;version:string;sha256:string;publishedAt:string};
+type Catalog={items:Rule[];activeRuleSet:RuleSetSummary|null};
+type ApiError={error?:string};
+
+type Editor={id:string;engineRuleId:string;name:string;severity:string;enabled:boolean;parameters:string};
+const engines=['NETA-PROC-001','NETA-PROC-002','NETA-PROC-003','NETA-PROC-004','NETA-PROC-005'];
+
+async function getCatalog():Promise<Catalog>{
+  const r=await fetch('/portal-api/rules',{headers:{accept:'application/json'},credentials:'same-origin'});
+  if(!r.ok){const b=await r.json().catch(()=>({} as ApiError)) as ApiError;throw new Error(b.error??`HTTP ${r.status}`);}return r.json() as Promise<Catalog>;
+}
+async function mutate<T>(method:'POST'|'PUT',path:string,body:unknown,session:Session):Promise<T>{
+  const r=await fetch(`/portal-api${path}`,{method,credentials:'same-origin',headers:{accept:'application/json','content-type':'application/json','x-neta-portal-request':'1','x-neta-portal-csrf':session.csrfToken??'','idempotency-key':`rules:${crypto.randomUUID()}`},body:JSON.stringify(body)});
+  if(!r.ok){const b=await r.json().catch(()=>({} as ApiError)) as ApiError;throw new Error(b.error??`HTTP ${r.status}`);}return r.json() as Promise<T>;
+}
+function canWrite(session:Session){return session.role==='OPERATOR'||session.role==='ADMIN';}
+function badge(value:string){const n=value.toLowerCase();const tone=n==='default'?'muted':n==='custom'?'ok':n==='high'?'danger':n==='medium'?'warn':'muted';return <span className={`badge ${tone}`}>{value}</span>;}
+function pretty(value:Record<string,unknown>){return JSON.stringify(value,null,2);}
+function emptyEditor():Editor{return{id:'',engineRuleId:'NETA-PROC-004',name:'',severity:'medium',enabled:true,parameters:'{}'};}
+
+export default function Rules({session}:{session:Session}){
+  const qc=useQueryClient();
+  const q=useQuery({queryKey:['rules'],queryFn:getCatalog,refetchInterval:15000});
+  const[editor,setEditor]=useState<Editor>(emptyEditor());
+  const[mode,setMode]=useState<'create'|'edit'>('create');
+  const[editingId,setEditingId]=useState('');
+  const[notice,setNotice]=useState('');
+  const writable=canWrite(session);
+  const byId=useMemo(()=>new Map((q.data?.items??[]).map(r=>[r.id,r])),[q.data]);
+
+  function chooseEngine(engine:string){
+    const base=byId.get(engine);
+    setEditor(e=>({...e,engineRuleId:engine,parameters:base?pretty(base.parameters):e.parameters}));
+  }
+  function edit(rule:Rule){
+    setMode('edit');setEditingId(rule.id);
+    setEditor({id:rule.id,engineRuleId:rule.engineRuleId,name:rule.name,severity:rule.severity,enabled:rule.enabled,parameters:pretty(rule.parameters)});
+    setNotice('Changes create a new immutable rule revision. Endpoints are unchanged until Publish is pressed.');
+  }
+  function create(){
+    const base=byId.get('NETA-PROC-004');
+    setMode('create');setEditingId('');setEditor({...emptyEditor(),parameters:base?pretty(base.parameters):'{}'});setNotice('');
+  }
+
+  const save=useMutation({
+    mutationFn:async()=>{
+      let parameters:Record<string,unknown>;
+      try{const parsed=JSON.parse(editor.parameters) as unknown;if(!parsed||typeof parsed!=='object'||Array.isArray(parsed))throw new Error();parameters=parsed as Record<string,unknown>;}catch{throw new Error('Parameters must be a valid JSON object.');}
+      if(mode==='create')return mutate<Rule>('POST','/rules/custom',{id:editor.id||undefined,engineRuleId:editor.engineRuleId,name:editor.name,severity:editor.severity,enabled:editor.enabled,parameters},session);
+      return mutate<Rule>('PUT',`/rules/${encodeURIComponent(editingId)}`,{name:editor.name,severity:editor.severity,enabled:editor.enabled,parameters},session);
+    },
+    onSuccess:async r=>{setNotice(`${r.id} revision ${r.revision} saved in the central catalog. Publish to make it the fleet target.`);await qc.invalidateQueries({queryKey:['rules']});}
+  });
+  const publish=useMutation({mutationFn:()=>mutate<any>('POST','/rule-sets/publish',{},session),onSuccess:async r=>{setNotice(`Published ${r.version} revision ${r.revision}. Agents can now apply it with fleet rules-update.`);await qc.invalidateQueries({queryKey:['rules']});}});
+
+  if(q.isLoading)return <main><header className="page-header"><div><h1>Rules</h1><p>Central detection policy</p></div></header><div className="panel loading">Loading…</div></main>;
+  if(q.error)return <main><header className="page-header"><div><h1>Rules</h1><p>Central detection policy</p></div></header><div className="panel error-panel"><strong>Unable to load rules</strong><span>{(q.error as Error).message}</span></div></main>;
+  const active=q.data?.activeRuleSet;
+  return <main>
+    <header className="page-header"><div><h1>Rules</h1><p>Default and custom detection rules managed centrally and published as immutable fleet rule sets</p></div></header>
+    <div className="cards">
+      <div className="metric-card"><div className="metric-title">Catalog rules</div><div className="metric-value">{q.data?.items.length??0}</div><div className="metric-detail">{q.data?.items.filter(r=>r.origin==='DEFAULT').length??0} default · {q.data?.items.filter(r=>r.origin==='CUSTOM').length??0} custom</div></div>
+      <div className="metric-card"><div className="metric-title">Active rule set</div><div className="metric-value">{active?.revision??'-'}</div><div className="metric-detail">{active?.version??'Not published yet'}</div></div>
+      <div className="metric-card"><div className="metric-title">Active SHA-256</div><div className="metric-value mono" style={{fontSize:'15px'}}>{active?.sha256?.slice(0,16)??'-'}{active?.sha256?'…':''}</div><div className="metric-detail">{active?.publishedAt?new Date(active.publishedAt).toLocaleString():'-'}</div></div>
+    </div>
+
+    <div className="notice" style={{marginBottom:'16px'}}>Catalog edits are staged centrally. <strong>Publish</strong> creates the immutable rule-set revision that agents fetch. Default rule history is preserved; edits create a new revision rather than overwriting history.</div>
+    {notice&&<div className="notice" style={{marginBottom:'16px'}}>{notice}</div>}
+    {!writable&&<div className="notice danger-notice" style={{marginBottom:'16px'}}>Your {session.role} role is read-only. OPERATOR or ADMIN is required to modify and publish rules.</div>}
+
+    <div className="panel table-panel" style={{marginBottom:'16px'}}><div className="toolbar" style={{padding:'14px 16px'}}><button type="button" onClick={create} disabled={!writable}>New custom rule</button><button type="button" className="secondary" onClick={()=>publish.mutate()} disabled={!writable||publish.isPending}>{publish.isPending?'Publishing…':'Publish current catalog'}</button>{publish.error&&<span className="login-error">{(publish.error as Error).message}</span>}</div><div className="table-wrap"><table><thead><tr><th>ID</th><th>Origin</th><th>Engine</th><th>Name</th><th>Category</th><th>Severity</th><th>Enabled</th><th>Revision</th><th>Parameters</th><th></th></tr></thead><tbody>{q.data?.items.map(rule=><tr key={rule.id}><td className="mono"><strong>{rule.id}</strong></td><td>{badge(rule.origin)}</td><td className="mono">{rule.engineRuleId}</td><td>{rule.name}</td><td>{rule.category}</td><td>{badge(rule.severity.toUpperCase())}</td><td>{rule.enabled?'Yes':'No'}</td><td>{rule.revision}</td><td><code>{JSON.stringify(rule.parameters)}</code></td><td><button type="button" className="secondary" onClick={()=>edit(rule)} disabled={!writable}>Edit</button></td></tr>)}</tbody></table></div></div>
+
+    {writable&&<form className="panel action-form" onSubmit={(e:FormEvent)=>{e.preventDefault();save.mutate()}}>
+      <h3>{mode==='create'?'Create custom rule':`Edit ${editingId}`}</h3>
+      <div className="form-grid">
+        {mode==='create'&&<label>Custom ID <span style={{opacity:.65}}>(optional)</span><input value={editor.id} onChange={e=>setEditor(v=>({...v,id:e.target.value}))} placeholder="CUS-MY-RULE"/></label>}
+        <label>Trusted engine<select value={editor.engineRuleId} onChange={e=>chooseEngine(e.target.value)} disabled={mode==='edit'}>{engines.map(e=><option value={e} key={e}>{e} — {byId.get(e)?.name??''}</option>)}</select></label>
+        <label>Name<input value={editor.name} onChange={e=>setEditor(v=>({...v,name:e.target.value}))} required/></label>
+        <label>Severity<select value={editor.severity} onChange={e=>setEditor(v=>({...v,severity:e.target.value}))}><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option></select></label>
+        <label style={{display:'flex',alignItems:'center',gap:'8px',alignSelf:'end',minHeight:'38px'}}><input type="checkbox" checked={editor.enabled} onChange={e=>setEditor(v=>({...v,enabled:e.target.checked}))} style={{minWidth:0,width:'18px',height:'18px',padding:0,margin:0}}/>Enabled</label>
+        <label className="wide">Parameters JSON<textarea rows={10} className="mono" value={editor.parameters} onChange={e=>setEditor(v=>({...v,parameters:e.target.value}))}/></label>
+      </div>
+      <div className="toolbar"><button disabled={save.isPending}>{save.isPending?'Saving…':mode==='create'?'Create staged rule':'Save new revision'}</button>{mode==='edit'&&<button type="button" className="secondary" onClick={create}>Cancel edit</button>}</div>
+      {save.error&&<div className="login-error">{(save.error as Error).message}</div>}
+    </form>}
+  </main>;
+}
