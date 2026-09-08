@@ -121,7 +121,8 @@ export function parseFindingSearch(text: string): { total: number; items: Findin
   const rows = lines.slice(start + 2);
 
   if (header.includes('CONFIDENCE') && header.includes('ASSESSMENT')) {
-    const labels = ['LAST SEEN','AGENT','TARGET','TYPE','SEVERITY','CONFIDENCE','ASSESSMENT','COUNT','STATUS','INCIDENT'];
+    const subjectColumn = header.includes('SUBJECT') ? 'SUBJECT' : 'TARGET';
+    const labels = ['LAST SEEN','AGENT',subjectColumn,'TYPE','SEVERITY','CONFIDENCE','ASSESSMENT','COUNT','STATUS','INCIDENT'];
     const items = rows
       .map((row) => fixedColumns(header, row, labels))
       .filter((c): c is string[] => Boolean(c))
