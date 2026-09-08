@@ -72,6 +72,10 @@ function legacyAssessment(type: string, trust: string): string {
   return 'INTENT_UNKNOWN';
 }
 
+function visible(item: FindingSummary | undefined): item is FindingSummary {
+  return Boolean(item && item.status.toUpperCase() !== 'SUPPRESSED');
+}
+
 function currentFinding(c: string[]): FindingSummary | undefined {
   if (c.length < 10 || !c[3] || !c[8]) return undefined;
   const count = Number(c[7]);
@@ -127,14 +131,14 @@ export function parseFindingSearch(text: string): { total: number; items: Findin
       .map((row) => fixedColumns(header, row, labels))
       .filter((c): c is string[] => Boolean(c))
       .map(currentFinding)
-      .filter((item): item is FindingSummary => Boolean(item));
+      .filter(visible);
     return { total, items };
   }
 
   const parser = header.includes('TYPE') && header.includes('SEVERITY')
     ? previousBehaviorFinding
     : legacyConnectionFinding;
-  const items = rows.map(columns).map(parser).filter((item): item is FindingSummary => Boolean(item));
+  const items = rows.map(columns).map(parser).filter(visible);
   return { total, items };
 }
 
