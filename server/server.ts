@@ -17,6 +17,7 @@ const app = Fastify({ logger: true, trustProxy: true, bodyLimit: 64 * 1024 });
 type Page<T> = { items: T[]; nextCursor: string | null };
 type AgentJson = { id: string; name: string; state: string; lastSeen: string | null; version: string | null; build: string | null; gitCommit: string | null; os: string | null; arch: string | null; artifactSha256: string | null; protocolVersion: number | null; schemaVersion: number | null; features: string | null; certificateSha256: string | null; enrolledAt: string | null; lastSequence: number };
 type FindingJson = { id: string; agentId: string; agentName: string; subject: string | null; subjectType: string | null; subjectId: string | null; host: string | null; port: number | null; type: string | null; severity: string | null; confidence: string | null; assessment: string | null; trust: string | null; performance: string | null; count: number; status: string | null; firstSeen: string | null; lastSeen: string | null; incidentId: string | null };
+type FindingDetailJson = { id:string; findingKey:string; messageId:string; agentId:string; agentName:string; subject:string; subjectType:string|null; subjectId:string|null; host:string|null; port:number|null; type:string; ruleId:string|null; severity:string; confidence:string; assessment:string; trust:string|null; performance:string|null; status:string; count:number; firstSeen:string|null; lastSeen:string|null; receivedAt:string|null; observedFrom:string|null; observedTo:string|null; incidentId:string|null; evidenceRoot:string|null; changes:unknown; ruleSet:unknown; payload:unknown; protocol:unknown };
 type CertificateJson = { agentId: string; agentName: string; agentStatus: string; state: string; fingerprint: string | null; notBefore: string | null; notAfter: string | null; rotatedAt: string | null };
 type UpgradeJson = { id: string; agentId: string; fromVersion: string | null; fromBuild: string | null; targetVersion: string; targetBuild: string; status: string; os: string; arch: string; sourceType: string; sourceRef: string; requestedAt: string; failureCode: string | null; failureMessage: string | null };
 type FleetSummary = { agents: { total: number; online: number; offline: number; linux: number; windows: number }; findings: Record<string, number>; certificates: Record<string, number> };
@@ -168,6 +169,23 @@ app.get('/portal-api/findings', async (request) => {
   if(config.legacyOperatorApi){const params=paramsFrom(query,['agent','trust','performance','status','target'],50);params.set('offset','0');return {...parseFindingSearch(await coordinator.request(`/api/v1/operator/finding-search?${params}`)),nextCursor:null,compatibilityMode:true};}
   const params=paramsFrom(query,['cursor','agent','trust','performance','status','target']); const page=await coordinator.requestJson<Page<FindingJson>>(`/api/v1/findings?${params}`,{actor});
   return {items:page.items.map((f)=>({id:f.id,lastSeen:f.lastSeen??'-',agent:f.agentName,target:f.subject??networkSubject(f.host,f.port),type:f.type??'-',severity:f.severity??'-',confidence:f.confidence??'-',assessment:f.assessment??'-',count:f.count,status:f.status??'-',incident:f.incidentId??'-'})),nextCursor:page.nextCursor,compatibilityMode:false};
+});
+
+app.get('/portal-api/findings/:finding', async (request) => {
+  const actor=currentSession(request); const {finding}=request.params as {finding:string};
+  return coordinator.requestJson<FindingDetailJson>(`/api/v1/findings/${encodeURIComponent(finding)}/detail`,{actor});
+});
+
+app.post('/portal-api/findings/:finding/suppress', async (request, reply) => {
+  const actor=requireRole(request,'OPERATOR'); const {finding}=request.params as {finding:string}; const body=validation(()=>validateReason(request.body)); const ids=operationHeaders(request as unknown as {headers:Record<string,unknown>});
+  const coordinatorResponse=await coordinator.request('/api/v1/operator/finding-suppress',{method:'POST',body:new URLSearchParams({id:finding,reason:body.reason}),admin:true,actor,...ids}); reply.header('x-request-id',ids.requestId);
+  return {accepted:true,operation:'FINDING_SUPPRESSED',requestId:ids.requestId,idempotencyKey:ids.idempotencyKey,idempotencyEnforcedByCoordinator:false,coordinatorResponse};
+});
+
+app.post('/portal-api/findings/:finding/false-positive', async (request, reply) => {
+  const actor=requireRole(request,'OPERATOR'); const {finding}=request.params as {finding:string}; const body=validation(()=>validateReason(request.body)); const ids=operationHeaders(request as unknown as {headers:Record<string,unknown>});
+  const coordinatorResponse=await coordinator.request('/api/v1/operator/finding-false-positive',{method:'POST',body:new URLSearchParams({id:finding,reason:body.reason}),admin:true,actor,...ids}); reply.header('x-request-id',ids.requestId);
+  return {accepted:true,operation:'FINDING_FALSE_POSITIVE',requestId:ids.requestId,idempotencyKey:ids.idempotencyKey,idempotencyEnforcedByCoordinator:false,coordinatorResponse};
 });
 
 app.get('/portal-api/upgrades', async (request) => {
