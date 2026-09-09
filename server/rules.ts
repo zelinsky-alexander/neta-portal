@@ -11,6 +11,11 @@ type RuleJson = {
 };
 type RuleSetSummary = { revision:number; version:string; sha256:string; publishedAt:string };
 type RuleCatalog = { items:RuleJson[]; activeRuleSet:RuleSetSummary|null };
+type FindingTuneBody = {
+  reason:string;
+  scope:'ENDPOINT'|'GROUP'|'GLOBAL';
+  action:'NONE'|'PROPOSE_RULE_EXCLUSION'|'PROPOSE_BASELINE';
+};
 
 type Dependencies = {
   coordinator: CoordinatorClient;
@@ -25,6 +30,23 @@ function requireOperator(session:PortalSession){
 function bodyObject(value:unknown):Record<string,unknown>{
   if(!value||typeof value!=='object'||Array.isArray(value)) throw Object.assign(new Error('JSON object body is required'),{statusCode:400});
   return value as Record<string,unknown>;
+}
+
+function reasonFrom(value:unknown):string{
+  const body=bodyObject(value); const reason=typeof body.reason==='string'?body.reason.trim():'';
+  if(!reason) throw Object.assign(new Error('reason is required'),{statusCode:400});
+  if(reason.length>1000) throw Object.assign(new Error('reason must be at most 1000 characters'),{statusCode:400});
+  return reason;
+}
+
+function findingTuneFrom(value:unknown):FindingTuneBody{
+  const body=bodyObject(value); const reason=reasonFrom(body);
+  const scope=body.scope;
+  const action=body.action;
+  if(scope!=='ENDPOINT'&&scope!=='GROUP'&&scope!=='GLOBAL') throw Object.assign(new Error('scope must be ENDPOINT, GROUP, or GLOBAL'),{statusCode:400});
+  if(action!=='NONE'&&action!=='PROPOSE_RULE_EXCLUSION'&&action!=='PROPOSE_BASELINE') throw Object.assign(new Error('unsupported tuning action'),{statusCode:400});
+  if(scope==='GROUP'&&action!=='NONE') throw Object.assign(new Error('group-scoped tuning is not available yet'),{statusCode:400});
+  return {reason,scope,action};
 }
 
 export async function registerRuleRoutes(app:FastifyInstance,deps:Dependencies){
@@ -64,5 +86,29 @@ export async function registerRuleRoutes(app:FastifyInstance,deps:Dependencies){
     });
     reply.header('x-request-id',ids.requestId);
     return reply.code(201).send(published);
+  });
+
+  // RM3.2: explicit finding semantics. These coexist with the older proxy
+  // routes in server.ts so already-deployed clients remain compatible.
+  app.post('/portal-api/findings/:finding/dismiss',async (request,reply)=>{
+    const actor=requireSession(request); requireOperator(actor);
+    const {finding}=request.params as {finding:string}; const reason=reasonFrom(request.body);
+    const ids=requireOperationId(request as unknown as {headers:Record<string,unknown>});
+    const coordinatorResponse=await coordinator.request('/api/v1/operator/finding-dismiss',{
+      method:'POST',body:new URLSearchParams({id:finding,reason}),admin:true,actor,...ids
+    });
+    reply.header('x-request-id',ids.requestId);
+    return {accepted:true,operation:'FINDING_DISMISSED',requestId:ids.requestId,idempotencyKey:ids.idempotencyKey,idempotencyEnforcedByCoordinator:false,coordinatorResponse};
+  });
+
+  app.post('/portal-api/findings/:finding/tune',async (request,reply)=>{
+    const actor=requireSession(request); requireOperator(actor);
+    const {finding}=request.params as {finding:string}; const body=findingTuneFrom(request.body);
+    const ids=requireOperationId(request as unknown as {headers:Record<string,unknown>});
+    const coordinatorResponse=await coordinator.request('/api/v1/operator/finding-tune',{
+      method:'POST',body:new URLSearchParams({id:finding,reason:body.reason,scope:body.scope,action:body.action}),admin:true,actor,...ids
+    });
+    reply.header('x-request-id',ids.requestId);
+    return {accepted:true,operation:'FINDING_FALSE_POSITIVE_TUNED',requestId:ids.requestId,idempotencyKey:ids.idempotencyKey,idempotencyEnforcedByCoordinator:false,coordinatorResponse};
   });
 }
