@@ -37,7 +37,9 @@ export default function FindingDetail({session}:{session:Session}){
   const mutation=useMutation({mutationFn:({action}:{action:'suppress'|'false-positive'})=>postJson<OperationResult>(`/findings/${encodeURIComponent(finding)}/${action}`,{reason},session,`finding:${action}:${crypto.randomUUID()}`),onSuccess:async(result)=>{await Promise.all([qc.invalidateQueries({queryKey:['findings']}),qc.invalidateQueries({queryKey:['dashboard']})]);alert(result.coordinatorResponse??result.operation);navigate('/findings');}});
   function dispose(action:'suppress'|'false-positive'){
     if(!reason.trim())return;
-    const wording=action==='suppress'?'Suppress this exact finding? It will be deleted from active coordinator storage and the same agent/finding key will not be re-created.':'Mark this exact finding false positive? It will be deleted from active coordinator storage and the same agent/finding key will not be re-created.';
+    const wording=action==='suppress'
+      ? 'Suppress this exact agent/finding pattern? The active finding will close and the same exact key will not immediately reappear.'
+      : 'Mark this finding false positive? RM3 will retain analyst feedback separately from the active finding, while the same exact agent/finding key is also suppressed. This action does not silently weaken the fleet rule.';
     if(confirm(wording))mutation.mutate({action});
   }
   if(q.isLoading)return <main><div className="panel loading">Loading finding…</div></main>;
@@ -61,10 +63,18 @@ export default function FindingDetail({session}:{session:Session}){
       <Field label="Finding key" value={value(f.findingKey)} mono wide/><Field label="Message ID" value={value(f.messageId)} mono wide/>
     </div>
     <div className="panel action-form">
-      <h3>Disposition</h3>
-      <p>For now, both dispositions remove the finding from coordinator findings. A minimal exact suppression key is retained so the same agent/finding key does not immediately reappear. The original finding payload is not moved to trash.</p>
-      <label>Reason<textarea value={reason} onChange={e=>setReason(e.target.value)} maxLength={1000} disabled={!allowed(session)||mutation.isPending} placeholder="Why should this finding be suppressed or treated as a false positive?"/></label>
-      <div className="toolbar"><button type="button" className="secondary" disabled={!allowed(session)||!reason.trim()||mutation.isPending} onClick={()=>dispose('suppress')}>Suppress finding</button><button type="button" className="danger" disabled={!allowed(session)||!reason.trim()||mutation.isPending} onClick={()=>dispose('false-positive')}>Mark false positive</button></div>
+      <h3>Resolve / tune</h3>
+      <div className="notice">
+        <strong>Suppress exact pattern</strong> is a narrow coordinator suppression: it closes this finding and blocks the same agent + finding key from immediately returning. It does not modify the detection rule.
+      </div>
+      <div className="notice" style={{marginTop:'10px'}}>
+        <strong>Mark false positive</strong> now retains RM3 analyst feedback separately from suppression. In this first RM3 slice it still applies exact-key suppression only; endpoint/group/global rule tuning and learning approvals will build on that retained feedback rather than silently changing policy.
+      </div>
+      <label>Reason<textarea value={reason} onChange={e=>setReason(e.target.value)} maxLength={1000} disabled={!allowed(session)||mutation.isPending} placeholder="Why is this expected behavior, or why should this exact pattern be suppressed?"/></label>
+      <div className="toolbar">
+        <button type="button" className="secondary" disabled={!allowed(session)||!reason.trim()||mutation.isPending} onClick={()=>dispose('suppress')}>Suppress exact pattern</button>
+        <button type="button" className="danger" disabled={!allowed(session)||!reason.trim()||mutation.isPending} onClick={()=>dispose('false-positive')}>Mark false positive</button>
+      </div>
       {!allowed(session)&&<div className="notice danger-notice">OPERATOR or ADMIN role is required to change finding disposition.</div>}
       {mutation.error&&<div className="login-error">{(mutation.error as Error).message}</div>}
     </div>
