@@ -3,17 +3,31 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 
 type Role='VIEWER'|'OPERATOR'|'ADMIN';
 type Session={authenticated:boolean;user?:string;role?:Role;csrfToken?:string};
-type Rule={id:string;revision:number;origin:'DEFAULT'|'CUSTOM';engineRuleId:string;name:string;category:string;severity:string;enabled:boolean;parameters:Record<string,unknown>;createdBy:string;createdAt:string};
+type Rule={id:string;revision:number;origin:'DEFAULT'|'CUSTOM';engineRuleId:string;name:string;category:string;severity:string;enabled:boolean;parameters:Record<string,unknown>;exclude:Record<string,unknown>;createdBy:string;createdAt:string};
 type RuleSetSummary={revision:number;version:string;sha256:string;publishedAt:string};
 type Catalog={items:Rule[];activeRuleSet:RuleSetSummary|null};
 type ApiError={error?:string};
-type Editor={id:string;engineRuleId:string;name:string;severity:string;enabled:boolean;parameters:string};
+type Editor={id:string;engineRuleId:string;name:string;severity:string;enabled:boolean;parameters:string;exclude:string};
 
 const customEngines=[
   'NETA-PROC-001','NETA-PROC-002','NETA-PROC-003','NETA-PROC-004','NETA-PROC-005',
   'NETA-BEH-001','NETA-NET-001','NETA-NET-002','NETA-NET-003','NETA-NET-004',
   'NETA-DNS-001','NETA-DNS-002','NETA-DNS-003','NETA-TLS-001','NETA-TLS-002','NETA-ROUTE-001'
 ];
+
+const exclusionExample={
+  process_names:['svchost.exe','chrome.exe'],
+  executable_paths:[],
+  process_path_prefixes:[],
+  parent_process_names:[],
+  users:[],
+  remote_hosts:[],
+  remote_ips:[],
+  remote_ports:[],
+  local_ports:[],
+  domains:[],
+  directions:[]
+};
 
 async function getCatalog():Promise<Catalog>{
   const r=await fetch('/portal-api/rules',{headers:{accept:'application/json'},credentials:'same-origin'});
@@ -26,7 +40,10 @@ async function mutate<T>(method:'POST'|'PUT',path:string,body:unknown,session:Se
 function canWrite(session:Session){return session.role==='OPERATOR'||session.role==='ADMIN';}
 function badge(value:string){const n=value.toLowerCase();const tone=n==='default'?'muted':n==='custom'?'ok':n==='high'?'danger':n==='medium'?'warn':'muted';return <span className={`badge ${tone}`}>{value}</span>;}
 function pretty(value:Record<string,unknown>){return JSON.stringify(value,null,2);}
-function emptyEditor():Editor{return{id:'',engineRuleId:'NETA-BEH-001',name:'',severity:'medium',enabled:true,parameters:'{}'};}
+function emptyEditor():Editor{return{id:'',engineRuleId:'NETA-BEH-001',name:'',severity:'medium',enabled:true,parameters:'{}',exclude:'{}'};}
+function parseObject(text:string,label:string):Record<string,unknown>{
+  try{const parsed=JSON.parse(text) as unknown;if(!parsed||typeof parsed!=='object'||Array.isArray(parsed))throw new Error();return parsed as Record<string,unknown>;}catch{throw new Error(`${label} must be a valid JSON object.`);}
+}
 
 export default function Rules({session}:{session:Session}){
   const qc=useQueryClient();
@@ -41,25 +58,25 @@ export default function Rules({session}:{session:Session}){
 
   function chooseEngine(engine:string){
     const base=byId.get(engine);
-    setEditor(e=>({...e,engineRuleId:engine,parameters:base?pretty(base.parameters):e.parameters}));
+    setEditor(e=>({...e,engineRuleId:engine,parameters:base?pretty(base.parameters):e.parameters,exclude:base?pretty(base.exclude??{}):e.exclude}));
   }
   function edit(rule:Rule){
     setMode('edit');setEditingId(rule.id);
-    setEditor({id:rule.id,engineRuleId:rule.engineRuleId,name:rule.name,severity:rule.severity,enabled:rule.enabled,parameters:pretty(rule.parameters)});
+    setEditor({id:rule.id,engineRuleId:rule.engineRuleId,name:rule.name,severity:rule.severity,enabled:rule.enabled,parameters:pretty(rule.parameters),exclude:pretty(rule.exclude??{})});
     setNotice('Changes create a new immutable rule revision. Endpoints are unchanged until Publish is pressed.');
   }
   function create(){
     const initial=availableEngines[0]??'NETA-BEH-001';
     const base=byId.get(initial);
-    setMode('create');setEditingId('');setEditor({...emptyEditor(),engineRuleId:initial,parameters:base?pretty(base.parameters):'{}'});setNotice('');
+    setMode('create');setEditingId('');setEditor({...emptyEditor(),engineRuleId:initial,parameters:base?pretty(base.parameters):'{}',exclude:'{}'});setNotice('');
   }
 
   const save=useMutation({
     mutationFn:async()=>{
-      let parameters:Record<string,unknown>;
-      try{const parsed=JSON.parse(editor.parameters) as unknown;if(!parsed||typeof parsed!=='object'||Array.isArray(parsed))throw new Error();parameters=parsed as Record<string,unknown>;}catch{throw new Error('Parameters must be a valid JSON object.');}
-      if(mode==='create')return mutate<Rule>('POST','/rules/custom',{id:editor.id||undefined,engineRuleId:editor.engineRuleId,name:editor.name,severity:editor.severity,enabled:editor.enabled,parameters},session);
-      return mutate<Rule>('PUT',`/rules/${encodeURIComponent(editingId)}`,{name:editor.name,severity:editor.severity,enabled:editor.enabled,parameters},session);
+      const parameters=parseObject(editor.parameters,'Parameters');
+      const exclude=parseObject(editor.exclude,'Exclusions');
+      if(mode==='create')return mutate<Rule>('POST','/rules/custom',{id:editor.id||undefined,engineRuleId:editor.engineRuleId,name:editor.name,severity:editor.severity,enabled:editor.enabled,parameters,exclude},session);
+      return mutate<Rule>('PUT',`/rules/${encodeURIComponent(editingId)}`,{name:editor.name,severity:editor.severity,enabled:editor.enabled,parameters,exclude},session);
     },
     onSuccess:async r=>{setNotice(`${r.id} revision ${r.revision} saved in the central catalog. Publish to make it the fleet target.`);await qc.invalidateQueries({queryKey:['rules']});}
   });
@@ -77,11 +94,11 @@ export default function Rules({session}:{session:Session}){
       <div className="metric-card"><div className="metric-title">Active SHA-256</div><div className="metric-value mono" style={{fontSize:'15px'}}>{active?.sha256?.slice(0,16)??'-'}{active?.sha256?'…':''}</div><div className="metric-detail">{active?.publishedAt?new Date(active.publishedAt).toLocaleString():'-'}</div></div>
     </div>
 
-    <div className="notice" style={{marginBottom:'16px'}}>RM2 uses trusted evaluators compiled into the agent. Default performance/trust policies are centrally editable; independent custom rules use the multi-instance process, behavior, network, DNS, TLS and route engines. The portal never sends executable rule code. Catalog edits are staged until <strong>Publish</strong>.</div>
+    <div className="notice" style={{marginBottom:'16px'}}>Per-rule exclusions skip evaluation/reporting when any configured process, path, user, destination, domain, port or direction matches. Exclusions are local to that rule—ignoring Chrome in one network rule does not globally hide Chrome from other detections.</div>
     {notice&&<div className="notice" style={{marginBottom:'16px'}}>{notice}</div>}
     {!writable&&<div className="notice danger-notice" style={{marginBottom:'16px'}}>Your {session.role} role is read-only. OPERATOR or ADMIN is required to modify and publish rules.</div>}
 
-    <div className="panel table-panel" style={{marginBottom:'16px'}}><div className="toolbar" style={{padding:'14px 16px'}}><button type="button" onClick={create} disabled={!writable}>New custom rule</button><button type="button" className="secondary" onClick={()=>publish.mutate()} disabled={!writable||publish.isPending}>{publish.isPending?'Publishing…':'Publish current catalog'}</button>{publish.error&&<span className="login-error">{(publish.error as Error).message}</span>}</div><div className="table-wrap"><table><thead><tr><th>ID</th><th>Origin</th><th>Engine</th><th>Name</th><th>Category</th><th>Severity</th><th>Enabled</th><th>Revision</th><th>Parameters</th><th></th></tr></thead><tbody>{q.data?.items.map(rule=><tr key={rule.id}><td className="mono"><strong>{rule.id}</strong></td><td>{badge(rule.origin)}</td><td className="mono">{rule.engineRuleId}</td><td>{rule.name}</td><td>{rule.category}</td><td>{badge(rule.severity.toUpperCase())}</td><td>{rule.enabled?'Yes':'No'}</td><td>{rule.revision}</td><td><code>{JSON.stringify(rule.parameters)}</code></td><td><button type="button" className="secondary" onClick={()=>edit(rule)} disabled={!writable}>Edit</button></td></tr>)}</tbody></table></div></div>
+    <div className="panel table-panel" style={{marginBottom:'16px'}}><div className="toolbar" style={{padding:'14px 16px'}}><button type="button" onClick={create} disabled={!writable}>New custom rule</button><button type="button" className="secondary" onClick={()=>publish.mutate()} disabled={!writable||publish.isPending}>{publish.isPending?'Publishing…':'Publish current catalog'}</button>{publish.error&&<span className="login-error">{(publish.error as Error).message}</span>}</div><div className="table-wrap"><table><thead><tr><th>ID</th><th>Origin</th><th>Engine</th><th>Name</th><th>Category</th><th>Severity</th><th>Enabled</th><th>Revision</th><th>Parameters</th><th>Exclusions</th><th></th></tr></thead><tbody>{q.data?.items.map(rule=><tr key={rule.id}><td className="mono"><strong>{rule.id}</strong></td><td>{badge(rule.origin)}</td><td className="mono">{rule.engineRuleId}</td><td>{rule.name}</td><td>{rule.category}</td><td>{badge(rule.severity.toUpperCase())}</td><td>{rule.enabled?'Yes':'No'}</td><td>{rule.revision}</td><td><code>{JSON.stringify(rule.parameters)}</code></td><td><code>{JSON.stringify(rule.exclude??{})}</code></td><td><button type="button" className="secondary" onClick={()=>edit(rule)} disabled={!writable}>Edit</button></td></tr>)}</tbody></table></div></div>
 
     {writable&&<form className="panel action-form" onSubmit={(e:FormEvent)=>{e.preventDefault();save.mutate()}}>
       <h3>{mode==='create'?'Create custom rule':`Edit ${editingId}`}</h3>
@@ -92,6 +109,7 @@ export default function Rules({session}:{session:Session}){
         <label>Severity<select value={editor.severity} onChange={e=>setEditor(v=>({...v,severity:e.target.value}))}><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option></select></label>
         <label style={{display:'flex',alignItems:'center',gap:'8px',alignSelf:'end',minHeight:'38px'}}><input type="checkbox" checked={editor.enabled} onChange={e=>setEditor(v=>({...v,enabled:e.target.checked}))} style={{minWidth:0,width:'18px',height:'18px',padding:0,margin:0}}/>Enabled</label>
         <label className="wide">Parameters JSON<textarea rows={10} className="mono" value={editor.parameters} onChange={e=>setEditor(v=>({...v,parameters:e.target.value}))}/></label>
+        <label className="wide">Exclusions JSON<textarea rows={12} className="mono" value={editor.exclude} onChange={e=>setEditor(v=>({...v,exclude:e.target.value}))} placeholder={pretty(exclusionExample)}/><span style={{opacity:.72}}>Supported: process_names, executable_paths, process_path_prefixes, parent_process_names, users, remote_hosts, remote_ips, remote_ports, local_ports, domains, directions.</span></label>
       </div>
       <div className="toolbar"><button disabled={save.isPending}>{save.isPending?'Saving…':mode==='create'?'Create staged rule':'Save new revision'}</button>{mode==='edit'&&<button type="button" className="secondary" onClick={create}>Cancel edit</button>}</div>
       {save.error&&<div className="login-error">{(save.error as Error).message}</div>}
