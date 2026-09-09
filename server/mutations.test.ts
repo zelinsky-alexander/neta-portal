@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { requireIdempotencyKey, validateReason, validateRotation, validateUpgrade } from './mutations.js';
+import { requireIdempotencyKey, validateFindingTune, validateReason, validateRotation, validateUpgrade } from './mutations.js';
 
-describe('Portal 0.2 mutation validation', () => {
+describe('Portal mutation validation', () => {
   it('accepts a bounded upgrade request', () => {
     expect(validateUpgrade({ agent: 'agent-a', source: 'release', ref: 'v0.4.2', allowDevelopment: false })).toEqual({
       agent: 'agent-a', source: 'release', ref: 'v0.4.2', allowDevelopment: false
@@ -10,6 +10,14 @@ describe('Portal 0.2 mutation validation', () => {
 
   it('rejects missing reasons', () => {
     expect(() => validateReason({ reason: '   ' })).toThrow('reason is required');
+  });
+
+  it('validates RM3.2 scoped finding tuning', () => {
+    expect(validateFindingTune({ reason: 'known WSL parent', scope: 'ENDPOINT', action: 'PROPOSE_RULE_EXCLUSION' })).toEqual({
+      reason: 'known WSL parent', scope: 'ENDPOINT', action: 'PROPOSE_RULE_EXCLUSION'
+    });
+    expect(() => validateFindingTune({ reason: 'known', scope: 'EXACT', action: 'PROPOSE_RULE_EXCLUSION' })).toThrow('scope must be');
+    expect(() => validateFindingTune({ reason: 'known', scope: 'GROUP', action: 'PROPOSE_BASELINE' })).toThrow('group-scoped tuning');
   });
 
   it('requires an agent-generated PEM CSR for rotation', () => {
