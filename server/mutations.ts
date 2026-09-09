@@ -33,7 +33,7 @@ export function validateUpgrade(body: unknown): UpgradeMutation {
 
 export function validateReason(body: unknown): ReasonMutation {
   const value = (body ?? {}) as Record<string, unknown>;
-  return { reason: required(value.reason, 'reason', 1000) };
+  return { reason: required(value.reason, 'reason', 500) };
 }
 
 export function validateFindingTune(body: unknown): FindingTuneMutation {
