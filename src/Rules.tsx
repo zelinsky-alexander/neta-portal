@@ -9,8 +9,7 @@ type Catalog={items:Rule[];activeRuleSet:RuleSetSummary|null};
 type ApiError={error?:string};
 type Editor={id:string;engineRuleId:string;name:string;severity:string;enabled:boolean;parameters:string};
 
-const engines=[
-  'NETA-PERF-001','NETA-TRUST-001','NETA-TRUST-002',
+const customEngines=[
   'NETA-PROC-001','NETA-PROC-002','NETA-PROC-003','NETA-PROC-004','NETA-PROC-005',
   'NETA-BEH-001','NETA-NET-001','NETA-NET-002','NETA-NET-003','NETA-NET-004',
   'NETA-DNS-001','NETA-DNS-002','NETA-DNS-003','NETA-TLS-001','NETA-TLS-002','NETA-ROUTE-001'
@@ -38,7 +37,7 @@ export default function Rules({session}:{session:Session}){
   const[notice,setNotice]=useState('');
   const writable=canWrite(session);
   const byId=useMemo(()=>new Map((q.data?.items??[]).map(r=>[r.id,r])),[q.data]);
-  const availableEngines=useMemo(()=>engines.filter(id=>byId.has(id)),[byId]);
+  const availableEngines=useMemo(()=>customEngines.filter(id=>byId.has(id)),[byId]);
 
   function chooseEngine(engine:string){
     const base=byId.get(engine);
@@ -70,15 +69,15 @@ export default function Rules({session}:{session:Session}){
   if(q.error)return <main><header className="page-header"><div><h1>Rules</h1><p>Central detection policy</p></div></header><div className="panel error-panel"><strong>Unable to load rules</strong><span>{(q.error as Error).message}</span></div></main>;
   const active=q.data?.activeRuleSet;
   return <main>
-    <header className="page-header"><div><h1>Rules</h1><p>Unified process, network, DNS, TLS, route and behavior rules managed centrally</p></div></header>
+    <header className="page-header"><div><h1>Rules</h1><p>Unified performance, trust, process, network, DNS, TLS, route and behavior rules managed centrally</p></div></header>
     <div className="cards">
       <div className="metric-card"><div className="metric-title">Catalog rules</div><div className="metric-value">{q.data?.items.length??0}</div><div className="metric-detail">{q.data?.items.filter(r=>r.origin==='DEFAULT').length??0} default · {q.data?.items.filter(r=>r.origin==='CUSTOM').length??0} custom</div></div>
-      <div className="metric-card"><div className="metric-title">Trusted engines</div><div className="metric-value">{availableEngines.length}</div><div className="metric-detail">No arbitrary endpoint code</div></div>
+      <div className="metric-card"><div className="metric-title">Custom rule engines</div><div className="metric-value">{availableEngines.length}</div><div className="metric-detail">Multi-instance trusted evaluators</div></div>
       <div className="metric-card"><div className="metric-title">Active rule set</div><div className="metric-value">{active?.revision??'-'}</div><div className="metric-detail">{active?.version??'Not published yet'}</div></div>
       <div className="metric-card"><div className="metric-title">Active SHA-256</div><div className="metric-value mono" style={{fontSize:'15px'}}>{active?.sha256?.slice(0,16)??'-'}{active?.sha256?'…':''}</div><div className="metric-detail">{active?.publishedAt?new Date(active.publishedAt).toLocaleString():'-'}</div></div>
     </div>
 
-    <div className="notice" style={{marginBottom:'16px'}}>RM2 uses trusted evaluators compiled into the agent. Custom rules select an engine and configure its bounded parameters; the portal never sends executable rule code. Catalog edits are staged until <strong>Publish</strong>.</div>
+    <div className="notice" style={{marginBottom:'16px'}}>RM2 uses trusted evaluators compiled into the agent. Default performance/trust policies are centrally editable; independent custom rules use the multi-instance process, behavior, network, DNS, TLS and route engines. The portal never sends executable rule code. Catalog edits are staged until <strong>Publish</strong>.</div>
     {notice&&<div className="notice" style={{marginBottom:'16px'}}>{notice}</div>}
     {!writable&&<div className="notice danger-notice" style={{marginBottom:'16px'}}>Your {session.role} role is read-only. OPERATOR or ADMIN is required to modify and publish rules.</div>}
 
