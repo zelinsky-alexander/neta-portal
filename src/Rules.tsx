@@ -40,6 +40,7 @@ async function mutate<T>(method:'POST'|'PUT',path:string,body:unknown,session:Se
 function canWrite(session:Session){return session.role==='OPERATOR'||session.role==='ADMIN';}
 function badge(value:string){const n=value.toLowerCase();const tone=n==='default'?'muted':n==='custom'?'ok':n==='high'?'danger':n==='medium'?'warn':'muted';return <span className={`badge ${tone}`}>{value}</span>;}
 function pretty(value:Record<string,unknown>){return JSON.stringify(value,null,2);}
+function displayRuleId(id:string){return id.startsWith('NETA-')?id.slice(5):id;}
 function emptyEditor():Editor{return{id:'',engineRuleId:'NETA-BEH-001',name:'',severity:'medium',enabled:true,parameters:'{}',exclude:'{}'};}
 function parseObject(text:string,label:string):Record<string,unknown>{
   try{const parsed=JSON.parse(text) as unknown;if(!parsed||typeof parsed!=='object'||Array.isArray(parsed))throw new Error();return parsed as Record<string,unknown>;}catch{throw new Error(`${label} must be a valid JSON object.`);}
@@ -55,6 +56,7 @@ export default function Rules({session}:{session:Session}){
   const writable=canWrite(session);
   const byId=useMemo(()=>new Map((q.data?.items??[]).map(r=>[r.id,r])),[q.data]);
   const availableEngines=useMemo(()=>customEngines.filter(id=>byId.has(id)),[byId]);
+  const editingRule=mode==='edit'?byId.get(editingId):undefined;
 
   function chooseEngine(engine:string){
     const base=byId.get(engine);
@@ -69,6 +71,11 @@ export default function Rules({session}:{session:Session}){
     const initial=availableEngines[0]??'NETA-BEH-001';
     const base=byId.get(initial);
     setMode('create');setEditingId('');setEditor({...emptyEditor(),engineRuleId:initial,parameters:base?pretty(base.parameters):'{}',exclude:'{}'});setNotice('');
+  }
+  function ruleIdControl(rule:Rule){
+    const label=displayRuleId(rule.id);
+    if(!writable)return <span className="mono rule-id-text" title={rule.id}>{label}</span>;
+    return <button type="button" className="rule-id-link mono" title={`Edit ${rule.id}`} onClick={()=>edit(rule)}>{label}</button>;
   }
 
   const save=useMutation({
@@ -98,13 +105,17 @@ export default function Rules({session}:{session:Session}){
     {notice&&<div className="notice" style={{marginBottom:'16px'}}>{notice}</div>}
     {!writable&&<div className="notice danger-notice" style={{marginBottom:'16px'}}>Your {session.role} role is read-only. OPERATOR or ADMIN is required to modify and publish rules.</div>}
 
-    <div className="panel table-panel" style={{marginBottom:'16px'}}><div className="toolbar" style={{padding:'14px 16px'}}><button type="button" onClick={create} disabled={!writable}>New custom rule</button><button type="button" className="secondary" onClick={()=>publish.mutate()} disabled={!writable||publish.isPending}>{publish.isPending?'Publishing…':'Publish current catalog'}</button>{publish.error&&<span className="login-error">{(publish.error as Error).message}</span>}</div><div className="table-wrap"><table><thead><tr><th>ID</th><th>Origin</th><th>Engine</th><th>Name</th><th>Category</th><th>Severity</th><th>Enabled</th><th>Revision</th><th>Parameters</th><th>Exclusions</th><th></th></tr></thead><tbody>{q.data?.items.map(rule=><tr key={rule.id}><td className="mono"><strong>{rule.id}</strong></td><td>{badge(rule.origin)}</td><td className="mono">{rule.engineRuleId}</td><td>{rule.name}</td><td>{rule.category}</td><td>{badge(rule.severity.toUpperCase())}</td><td>{rule.enabled?'Yes':'No'}</td><td>{rule.revision}</td><td><code>{JSON.stringify(rule.parameters)}</code></td><td><code>{JSON.stringify(rule.exclude??{})}</code></td><td><button type="button" className="secondary" onClick={()=>edit(rule)} disabled={!writable}>Edit</button></td></tr>)}</tbody></table></div></div>
+    <div className="panel table-panel" style={{marginBottom:'16px'}}>
+      <div className="toolbar" style={{padding:'14px 16px'}}><button type="button" onClick={create} disabled={!writable}>New custom rule</button><button type="button" className="secondary" onClick={()=>publish.mutate()} disabled={!writable||publish.isPending}>{publish.isPending?'Publishing…':'Publish current catalog'}</button>{publish.error&&<span className="login-error">{(publish.error as Error).message}</span>}</div>
+      <div className="rules-desktop table-wrap"><table><thead><tr><th>Rule</th><th>Origin</th><th>Name</th><th>Category</th><th>Severity</th><th>Enabled</th><th>Revision</th><th>Parameters</th><th>Exclusions</th></tr></thead><tbody>{q.data?.items.map(rule=><tr key={rule.id}><td><strong>{ruleIdControl(rule)}</strong></td><td>{badge(rule.origin)}</td><td>{rule.name}</td><td>{rule.category}</td><td>{badge(rule.severity.toUpperCase())}</td><td>{rule.enabled?'Yes':'No'}</td><td>{rule.revision}</td><td><code>{JSON.stringify(rule.parameters)}</code></td><td><code>{JSON.stringify(rule.exclude??{})}</code></td></tr>)}</tbody></table></div>
+      <div className="rules-mobile">{q.data?.items.map(rule=><article className="rule-card" key={rule.id}><div className="rule-card-heading"><strong>{ruleIdControl(rule)}</strong>{badge(rule.origin)}</div><div className="rule-card-name">{rule.name}</div><div className="rule-card-meta"><span>{rule.category}</span><span>{badge(rule.severity.toUpperCase())}</span><span>{rule.enabled?'Enabled':'Disabled'}</span><span>Revision {rule.revision}</span></div></article>)}</div>
+    </div>
 
     {writable&&<form className="panel action-form" onSubmit={(e:FormEvent)=>{e.preventDefault();save.mutate()}}>
-      <h3>{mode==='create'?'Create custom rule':`Edit ${editingId}`}</h3>
+      <h3>{mode==='create'?'Create custom rule':`Edit ${displayRuleId(editingId)}`}</h3>
       <div className="form-grid">
         {mode==='create'&&<label>Custom ID <span style={{opacity:.65}}>(optional)</span><input value={editor.id} onChange={e=>setEditor(v=>({...v,id:e.target.value}))} placeholder="CUS-MY-RULE"/></label>}
-        <label>Trusted engine<select value={editor.engineRuleId} onChange={e=>chooseEngine(e.target.value)} disabled={mode==='edit'}>{availableEngines.map(e=><option value={e} key={e}>{e} — {byId.get(e)?.name??''}</option>)}</select></label>
+        {(mode==='create'||editingRule?.origin==='CUSTOM')&&<label>Trusted engine<select value={editor.engineRuleId} onChange={e=>chooseEngine(e.target.value)} disabled={mode==='edit'}>{availableEngines.map(e=><option value={e} key={e}>{displayRuleId(e)} — {byId.get(e)?.name??''}</option>)}</select></label>}
         <label>Name<input value={editor.name} onChange={e=>setEditor(v=>({...v,name:e.target.value}))} required/></label>
         <label>Severity<select value={editor.severity} onChange={e=>setEditor(v=>({...v,severity:e.target.value}))}><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option></select></label>
         <label style={{display:'flex',alignItems:'center',gap:'8px',alignSelf:'end',minHeight:'38px'}}><input type="checkbox" checked={editor.enabled} onChange={e=>setEditor(v=>({...v,enabled:e.target.checked}))} style={{minWidth:0,width:'18px',height:'18px',padding:0,margin:0}}/>Enabled</label>
