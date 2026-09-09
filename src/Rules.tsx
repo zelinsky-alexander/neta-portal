@@ -7,9 +7,14 @@ type Rule={id:string;revision:number;origin:'DEFAULT'|'CUSTOM';engineRuleId:stri
 type RuleSetSummary={revision:number;version:string;sha256:string;publishedAt:string};
 type Catalog={items:Rule[];activeRuleSet:RuleSetSummary|null};
 type ApiError={error?:string};
-
 type Editor={id:string;engineRuleId:string;name:string;severity:string;enabled:boolean;parameters:string};
-const engines=['NETA-PROC-001','NETA-PROC-002','NETA-PROC-003','NETA-PROC-004','NETA-PROC-005'];
+
+const engines=[
+  'NETA-PERF-001','NETA-TRUST-001','NETA-TRUST-002',
+  'NETA-PROC-001','NETA-PROC-002','NETA-PROC-003','NETA-PROC-004','NETA-PROC-005',
+  'NETA-BEH-001','NETA-NET-001','NETA-NET-002','NETA-NET-003','NETA-NET-004',
+  'NETA-DNS-001','NETA-DNS-002','NETA-DNS-003','NETA-TLS-001','NETA-TLS-002','NETA-ROUTE-001'
+];
 
 async function getCatalog():Promise<Catalog>{
   const r=await fetch('/portal-api/rules',{headers:{accept:'application/json'},credentials:'same-origin'});
@@ -22,7 +27,7 @@ async function mutate<T>(method:'POST'|'PUT',path:string,body:unknown,session:Se
 function canWrite(session:Session){return session.role==='OPERATOR'||session.role==='ADMIN';}
 function badge(value:string){const n=value.toLowerCase();const tone=n==='default'?'muted':n==='custom'?'ok':n==='high'?'danger':n==='medium'?'warn':'muted';return <span className={`badge ${tone}`}>{value}</span>;}
 function pretty(value:Record<string,unknown>){return JSON.stringify(value,null,2);}
-function emptyEditor():Editor{return{id:'',engineRuleId:'NETA-PROC-004',name:'',severity:'medium',enabled:true,parameters:'{}'};}
+function emptyEditor():Editor{return{id:'',engineRuleId:'NETA-BEH-001',name:'',severity:'medium',enabled:true,parameters:'{}'};}
 
 export default function Rules({session}:{session:Session}){
   const qc=useQueryClient();
@@ -33,6 +38,7 @@ export default function Rules({session}:{session:Session}){
   const[notice,setNotice]=useState('');
   const writable=canWrite(session);
   const byId=useMemo(()=>new Map((q.data?.items??[]).map(r=>[r.id,r])),[q.data]);
+  const availableEngines=useMemo(()=>engines.filter(id=>byId.has(id)),[byId]);
 
   function chooseEngine(engine:string){
     const base=byId.get(engine);
@@ -44,8 +50,9 @@ export default function Rules({session}:{session:Session}){
     setNotice('Changes create a new immutable rule revision. Endpoints are unchanged until Publish is pressed.');
   }
   function create(){
-    const base=byId.get('NETA-PROC-004');
-    setMode('create');setEditingId('');setEditor({...emptyEditor(),parameters:base?pretty(base.parameters):'{}'});setNotice('');
+    const initial=availableEngines[0]??'NETA-BEH-001';
+    const base=byId.get(initial);
+    setMode('create');setEditingId('');setEditor({...emptyEditor(),engineRuleId:initial,parameters:base?pretty(base.parameters):'{}'});setNotice('');
   }
 
   const save=useMutation({
@@ -63,14 +70,15 @@ export default function Rules({session}:{session:Session}){
   if(q.error)return <main><header className="page-header"><div><h1>Rules</h1><p>Central detection policy</p></div></header><div className="panel error-panel"><strong>Unable to load rules</strong><span>{(q.error as Error).message}</span></div></main>;
   const active=q.data?.activeRuleSet;
   return <main>
-    <header className="page-header"><div><h1>Rules</h1><p>Default and custom detection rules managed centrally and published as immutable fleet rule sets</p></div></header>
+    <header className="page-header"><div><h1>Rules</h1><p>Unified process, network, DNS, TLS, route and behavior rules managed centrally</p></div></header>
     <div className="cards">
       <div className="metric-card"><div className="metric-title">Catalog rules</div><div className="metric-value">{q.data?.items.length??0}</div><div className="metric-detail">{q.data?.items.filter(r=>r.origin==='DEFAULT').length??0} default · {q.data?.items.filter(r=>r.origin==='CUSTOM').length??0} custom</div></div>
+      <div className="metric-card"><div className="metric-title">Trusted engines</div><div className="metric-value">{availableEngines.length}</div><div className="metric-detail">No arbitrary endpoint code</div></div>
       <div className="metric-card"><div className="metric-title">Active rule set</div><div className="metric-value">{active?.revision??'-'}</div><div className="metric-detail">{active?.version??'Not published yet'}</div></div>
       <div className="metric-card"><div className="metric-title">Active SHA-256</div><div className="metric-value mono" style={{fontSize:'15px'}}>{active?.sha256?.slice(0,16)??'-'}{active?.sha256?'…':''}</div><div className="metric-detail">{active?.publishedAt?new Date(active.publishedAt).toLocaleString():'-'}</div></div>
     </div>
 
-    <div className="notice" style={{marginBottom:'16px'}}>Catalog edits are staged centrally. <strong>Publish</strong> creates the immutable rule-set revision that agents fetch. Default rule history is preserved; edits create a new revision rather than overwriting history.</div>
+    <div className="notice" style={{marginBottom:'16px'}}>RM2 uses trusted evaluators compiled into the agent. Custom rules select an engine and configure its bounded parameters; the portal never sends executable rule code. Catalog edits are staged until <strong>Publish</strong>.</div>
     {notice&&<div className="notice" style={{marginBottom:'16px'}}>{notice}</div>}
     {!writable&&<div className="notice danger-notice" style={{marginBottom:'16px'}}>Your {session.role} role is read-only. OPERATOR or ADMIN is required to modify and publish rules.</div>}
 
@@ -80,7 +88,7 @@ export default function Rules({session}:{session:Session}){
       <h3>{mode==='create'?'Create custom rule':`Edit ${editingId}`}</h3>
       <div className="form-grid">
         {mode==='create'&&<label>Custom ID <span style={{opacity:.65}}>(optional)</span><input value={editor.id} onChange={e=>setEditor(v=>({...v,id:e.target.value}))} placeholder="CUS-MY-RULE"/></label>}
-        <label>Trusted engine<select value={editor.engineRuleId} onChange={e=>chooseEngine(e.target.value)} disabled={mode==='edit'}>{engines.map(e=><option value={e} key={e}>{e} — {byId.get(e)?.name??''}</option>)}</select></label>
+        <label>Trusted engine<select value={editor.engineRuleId} onChange={e=>chooseEngine(e.target.value)} disabled={mode==='edit'}>{availableEngines.map(e=><option value={e} key={e}>{e} — {byId.get(e)?.name??''}</option>)}</select></label>
         <label>Name<input value={editor.name} onChange={e=>setEditor(v=>({...v,name:e.target.value}))} required/></label>
         <label>Severity<select value={editor.severity} onChange={e=>setEditor(v=>({...v,severity:e.target.value}))}><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option></select></label>
         <label style={{display:'flex',alignItems:'center',gap:'8px',alignSelf:'end',minHeight:'38px'}}><input type="checkbox" checked={editor.enabled} onChange={e=>setEditor(v=>({...v,enabled:e.target.checked}))} style={{minWidth:0,width:'18px',height:'18px',padding:0,margin:0}}/>Enabled</label>
