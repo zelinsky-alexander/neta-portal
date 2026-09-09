@@ -15,6 +15,9 @@ type FindingDetailData = {
   firstSeen:string|null; lastSeen:string|null; receivedAt:string|null; observedFrom:string|null; observedTo:string|null;
   incidentId:string|null; evidenceRoot:string|null; changes:unknown; ruleSet:unknown; payload:unknown; protocol:ProtocolContext;
 };
+type ResolutionAction='dismiss'|'suppress'|'tune';
+type TuneScope='ENDPOINT'|'GROUP'|'GLOBAL';
+type TuneAction='NONE'|'PROPOSE_RULE_EXCLUSION'|'PROPOSE_BASELINE';
 
 async function getJson<T>(path:string):Promise<T>{
   const response=await fetch(`/portal-api${path}`,{headers:{accept:'application/json'},credentials:'same-origin'});
@@ -32,19 +35,31 @@ function Badge({value:v}:{value:string}){return <span className={`badge ${status
 function Field({label,value:v,mono=false,wide=false}:{label:string;value:React.ReactNode;mono?:boolean;wide?:boolean}){return <div className={`detail ${wide?'wide':''}`}><span>{label}</span><div className={mono?'mono':''}>{v}</div></div>;}
 
 export default function FindingDetail({session}:{session:Session}){
-  const {finding=''}=useParams(); const navigate=useNavigate(); const qc=useQueryClient(); const[reason,setReason]=useState('');
+  const {finding=''}=useParams(); const navigate=useNavigate(); const qc=useQueryClient();
+  const[reason,setReason]=useState('');
+  const[scope,setScope]=useState<TuneScope>('ENDPOINT');
+  const[tuneAction,setTuneAction]=useState<TuneAction>('PROPOSE_RULE_EXCLUSION');
   const q=useQuery({queryKey:['finding-detail',finding],queryFn:()=>getJson<FindingDetailData>(`/findings/${encodeURIComponent(finding)}`),enabled:Boolean(finding)});
-  const mutation=useMutation({mutationFn:({action}:{action:'suppress'|'false-positive'})=>postJson<OperationResult>(`/findings/${encodeURIComponent(finding)}/${action}`,{reason},session,`finding:${action}:${crypto.randomUUID()}`),onSuccess:async(result)=>{await Promise.all([qc.invalidateQueries({queryKey:['findings']}),qc.invalidateQueries({queryKey:['dashboard']})]);alert(result.coordinatorResponse??result.operation);navigate('/findings');}});
-  function dispose(action:'suppress'|'false-positive'){
+  const mutation=useMutation({
+    mutationFn:({action}:{action:ResolutionAction})=>{
+      const body=action==='tune'?{reason,scope,action:tuneAction}:{reason};
+      return postJson<OperationResult>(`/findings/${encodeURIComponent(finding)}/${action}`,body,session,`finding:${action}:${crypto.randomUUID()}`);
+    },
+    onSuccess:async(result)=>{await Promise.all([qc.invalidateQueries({queryKey:['findings']}),qc.invalidateQueries({queryKey:['dashboard']})]);alert(result.coordinatorResponse??result.operation);navigate('/findings');}
+  });
+  function resolve(action:ResolutionAction){
     if(!reason.trim())return;
-    const wording=action==='suppress'
-      ? 'Suppress this exact agent/finding pattern? The active finding will close and the same exact key will not immediately reappear.'
-      : 'Mark this finding false positive? RM3 will retain analyst feedback separately from the active finding, while the same exact agent/finding key is also suppressed. This action does not silently weaken the fleet rule.';
+    const wording=action==='dismiss'
+      ? 'Dismiss this finding? Only the current finding closes. No suppression or rule change is created, so the same behavior may alert again.'
+      : action==='suppress'
+        ? 'Suppress this exact agent/finding pattern? The active finding closes and the same exact key will not immediately reappear. The detection rule is not changed.'
+        : `Mark this finding false positive and stage ${tuneAction==='NONE'?'no policy change':tuneAction.replaceAll('_',' ').toLowerCase()} for ${scope.toLowerCase()} scope? No exact suppression will be created.`;
     if(confirm(wording))mutation.mutate({action});
   }
   if(q.isLoading)return <main><div className="panel loading">Loading finding…</div></main>;
   if(q.error)return <main><div className="panel error-panel"><strong>Unable to load finding</strong><span>{(q.error as Error).message}</span><Link to="/findings">Back to findings</Link></div></main>;
   const f=q.data!;
+  const processFinding=(f.subjectType??'').toUpperCase()==='PROCESS';
   return <main>
     <header className="page-header"><div><h1>Finding detail</h1><p>{f.id}</p></div></header>
     <div className="toolbar"><Link className="entity-link" to="/findings">← Back to findings</Link></div>
@@ -62,20 +77,39 @@ export default function FindingDetail({session}:{session:Session}){
       <Field label="Observed to" value={value(f.observedTo)}/><Field label="Evidence root" value={value(f.evidenceRoot)} mono wide/>
       <Field label="Finding key" value={value(f.findingKey)} mono wide/><Field label="Message ID" value={value(f.messageId)} mono wide/>
     </div>
+
     <div className="panel action-form">
-      <h3>Resolve / tune</h3>
-      <div className="notice">
-        <strong>Suppress exact pattern</strong> is a narrow coordinator suppression: it closes this finding and blocks the same agent + finding key from immediately returning. It does not modify the detection rule.
+      <h3>Resolve finding</h3>
+      <div className="notice"><strong>Dismiss</strong> closes only this occurrence. If the same behavior is observed later it may alert again.</div>
+      <div className="notice" style={{marginTop:'10px'}}><strong>Suppress exact pattern</strong> closes this finding and suppresses the same agent + finding key. It does not change the rule.</div>
+      <div className="notice" style={{marginTop:'10px'}}><strong>False positive / Tune</strong> records analyst feedback and can stage a scoped rule exclusion or baseline candidate. It does not create exact suppression and staged tuning is not active until a later approval/publish step.</div>
+
+      <label>Reason<textarea value={reason} onChange={e=>setReason(e.target.value)} maxLength={1000} disabled={!allowed(session)||mutation.isPending} placeholder="Why is this expected, irrelevant, or incorrectly detected?"/></label>
+
+      <div className="details-grid" style={{marginTop:'12px'}}>
+        <label className="detail"><span>Tuning scope</span><select value={scope} onChange={e=>setScope(e.target.value as TuneScope)} disabled={!allowed(session)||mutation.isPending}>
+          <option value="ENDPOINT">This endpoint</option>
+          <option value="GROUP" disabled>Endpoint group — later RM3</option>
+          <option value="GLOBAL">All endpoints</option>
+        </select></label>
+        <label className="detail"><span>Tuning action</span><select value={tuneAction} onChange={e=>setTuneAction(e.target.value as TuneAction)} disabled={!allowed(session)||mutation.isPending}>
+          <option value="PROPOSE_RULE_EXCLUSION">Stage rule exclusion</option>
+          {processFinding&&<option value="PROPOSE_BASELINE">Stage process baseline</option>}
+          <option value="NONE">Feedback only — no policy proposal</option>
+        </select></label>
       </div>
       <div className="notice" style={{marginTop:'10px'}}>
-        <strong>Mark false positive</strong> now retains RM3 analyst feedback separately from suppression. In this first RM3 slice it still applies exact-key suppression only; endpoint/group/global rule tuning and learning approvals will build on that retained feedback rather than silently changing policy.
+        {tuneAction==='PROPOSE_RULE_EXCLUSION'&&<>Proposed exclusion will be derived from the narrowest safe evidence available in this finding. For <span className="mono">NETA-PROC-002</span>, that means the observed parent process name.</>}
+        {tuneAction==='PROPOSE_BASELINE'&&<>A process parent → child baseline candidate will be staged for this endpoint. It will not become trusted automatically.</>}
+        {tuneAction==='NONE'&&<>Only analyst feedback is retained. No suppression, exclusion, or baseline proposal is created.</>}
       </div>
-      <label>Reason<textarea value={reason} onChange={e=>setReason(e.target.value)} maxLength={1000} disabled={!allowed(session)||mutation.isPending} placeholder="Why is this expected behavior, or why should this exact pattern be suppressed?"/></label>
-      <div className="toolbar">
-        <button type="button" className="secondary" disabled={!allowed(session)||!reason.trim()||mutation.isPending} onClick={()=>dispose('suppress')}>Suppress exact pattern</button>
-        <button type="button" className="danger" disabled={!allowed(session)||!reason.trim()||mutation.isPending} onClick={()=>dispose('false-positive')}>Mark false positive</button>
+
+      <div className="toolbar" style={{marginTop:'12px'}}>
+        <button type="button" className="secondary" disabled={!allowed(session)||!reason.trim()||mutation.isPending} onClick={()=>resolve('dismiss')}>Dismiss</button>
+        <button type="button" className="secondary" disabled={!allowed(session)||!reason.trim()||mutation.isPending} onClick={()=>resolve('suppress')}>Suppress exact pattern</button>
+        <button type="button" className="danger" disabled={!allowed(session)||!reason.trim()||mutation.isPending} onClick={()=>resolve('tune')}>False positive / Tune</button>
       </div>
-      {!allowed(session)&&<div className="notice danger-notice">OPERATOR or ADMIN role is required to change finding disposition.</div>}
+      {!allowed(session)&&<div className="notice danger-notice">OPERATOR or ADMIN role is required to resolve or tune findings.</div>}
       {mutation.error&&<div className="login-error">{(mutation.error as Error).message}</div>}
     </div>
     <div className="panel"><h3>Observed changes</h3><pre>{pretty(f.changes)}</pre></div>
