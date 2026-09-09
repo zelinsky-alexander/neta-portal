@@ -7,7 +7,7 @@ export type RulePortalRequest = { headers: Record<string, unknown>; portalSessio
 type RuleJson = {
   id:string; revision:number; origin:'DEFAULT'|'CUSTOM'; engineRuleId:string; name:string;
   category:string; severity:string; enabled:boolean; parameters:Record<string,unknown>;
-  createdBy:string; createdAt:string;
+  exclude:Record<string,unknown>; createdBy:string; createdAt:string;
 };
 type RuleSetSummary = { revision:number; version:string; sha256:string; publishedAt:string };
 type RuleCatalog = { items:RuleJson[]; activeRuleSet:RuleSetSummary|null };
