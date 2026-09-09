@@ -104,5 +104,14 @@ tbody tr:hover { background: #101d2f; }
 .modal-actions { justify-content: flex-end; margin-bottom: 0; }
 .csr-input { min-height: 180px; }
 .danger-copy { border-left: 3px solid #c34a58; padding: 9px 12px; margin: 12px 0; background: #241318; color: #ffb3ba; font-size: 12px; }
+.rule-id-link { border: 0; background: transparent; color: #d6e3f5; padding: 0; border-radius: 4px; text-align: left; text-decoration: underline; text-decoration-color: #365b8a; text-underline-offset: 3px; }
+.rule-id-link:hover:not(:disabled) { background: transparent; color: #6da3ff; text-decoration-color: currentColor; }
+.rule-id-link:focus-visible { outline: 2px solid #4c8dff; outline-offset: 3px; }
+.rule-id-text { color: #d6e3f5; }
+.rules-mobile { display: none; }
+.rule-card { padding: 15px 16px; border-top: 1px solid #1d2a3b; }
+.rule-card-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.rule-card-name { margin-top: 9px; color: #d4dce7; font-size: 14px; line-height: 1.4; }
+.rule-card-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin-top: 10px; color: #8090a6; font-size: 11px; }
 @media (max-width: 1050px) { .cards { grid-template-columns: repeat(2,1fr); } .shell { grid-template-columns: 190px 1fr; } main { padding: 28px 24px; } }
-@media (max-width: 720px) { .shell { display: block; } aside { position: static; height: auto; padding: 16px; } nav { display: flex; overflow-x: auto; } .aside-footer { display: none; } .brand { padding-bottom: 14px; } main { padding: 22px 14px 40px; } .cards, .split-panel, .details-grid, .form-grid { grid-template-columns: 1fr; } .detail.wide { grid-column: auto; } .toolbar, .row-actions { flex-wrap: wrap; } input, select { min-width: 0; flex: 1; } .checkbox-label { padding-top: 0; } }
+@media (max-width: 720px) { .shell { display: block; } aside { position: static; height: auto; padding: 16px; } nav { display: flex; overflow-x: auto; } .aside-footer { display: none; } .brand { padding-bottom: 14px; } main { padding: 22px 14px 40px; } .cards, .split-panel, .details-grid, .form-grid { grid-template-columns: 1fr; } .detail.wide { grid-column: auto; } .toolbar, .row-actions { flex-wrap: wrap; } input, select { min-width: 0; flex: 1; } .checkbox-label { padding-top: 0; } .rules-desktop { display: none; } .rules-mobile { display: grid; } .table-panel > .toolbar { margin-bottom: 0; } }
