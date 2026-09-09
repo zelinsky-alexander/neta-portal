@@ -57,6 +57,33 @@ export async function registerRuleRoutes(app:FastifyInstance,deps:Dependencies){
     return coordinator.requestJson<RuleCatalog>('/api/v1/rules',{actor});
   });
 
+  app.get('/portal-api/rule-overrides',async request=>{
+    const actor=requireSession(request); requireOperator(actor);
+    return coordinator.requestJson<unknown>('/api/v1/operator/rule-overrides',{admin:true,actor});
+  });
+
+  app.post('/portal-api/rule-overrides/:id/approve',async (request,reply)=>{
+    const actor=requireSession(request); requireOperator(actor);
+    const {id}=request.params as {id:string};
+    const ids=requireOperationId(request as unknown as {headers:Record<string,unknown>});
+    const result=await coordinator.requestJson<unknown>(`/api/v1/operator/rule-overrides/${encodeURIComponent(id)}/approve`,{
+      method:'POST',jsonBody:{},admin:true,actor,...ids
+    });
+    reply.header('x-request-id',ids.requestId);
+    return result;
+  });
+
+  app.post('/portal-api/rule-overrides/:id/retire',async (request,reply)=>{
+    const actor=requireSession(request); requireOperator(actor);
+    const {id}=request.params as {id:string};
+    const ids=requireOperationId(request as unknown as {headers:Record<string,unknown>});
+    const result=await coordinator.requestJson<unknown>(`/api/v1/operator/rule-overrides/${encodeURIComponent(id)}/retire`,{
+      method:'POST',jsonBody:{},admin:true,actor,...ids
+    });
+    reply.header('x-request-id',ids.requestId);
+    return result;
+  });
+
   app.post('/portal-api/rules/custom',async (request,reply)=>{
     const actor=requireSession(request); requireOperator(actor);
     const ids=requireOperationId(request as unknown as {headers:Record<string,unknown>});
