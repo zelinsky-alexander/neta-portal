@@ -84,6 +84,35 @@ export async function registerRuleRoutes(app:FastifyInstance,deps:Dependencies){
     return result;
   });
 
+  app.get('/portal-api/learning',async request=>{
+    const actor=requireSession(request); requireOperator(actor);
+    return coordinator.requestJson<unknown>('/api/v1/operator/learning',{admin:true,actor});
+  });
+
+  app.post('/portal-api/learning/:agent/start',async (request,reply)=>{
+    const actor=requireSession(request); requireOperator(actor);
+    const {agent}=request.params as {agent:string};
+    const body=bodyObject(request.body??{});
+    const minimumObservations=Number(body.minimumObservations??5);
+    const hours=Number(body.hours??24);
+    if(!Number.isInteger(minimumObservations)||minimumObservations<2||minimumObservations>1000) throw Object.assign(new Error('minimumObservations must be between 2 and 1000'),{statusCode:400});
+    if(!Number.isInteger(hours)||hours<1||hours>720) throw Object.assign(new Error('hours must be between 1 and 720'),{statusCode:400});
+    const ids=requireOperationId(request as unknown as {headers:Record<string,unknown>});
+    const params=new URLSearchParams({minimumObservations:String(minimumObservations),hours:String(hours)});
+    const result=await coordinator.requestJson<unknown>(`/api/v1/operator/learning/${encodeURIComponent(agent)}/start?${params}`,{method:'POST',jsonBody:{},admin:true,actor,...ids});
+    reply.header('x-request-id',ids.requestId); return result;
+  });
+
+  for(const action of ['review','off'] as const){
+    app.post(`/portal-api/learning/:agent/${action}`,async (request,reply)=>{
+      const actor=requireSession(request); requireOperator(actor);
+      const {agent}=request.params as {agent:string};
+      const ids=requireOperationId(request as unknown as {headers:Record<string,unknown>});
+      const result=await coordinator.requestJson<unknown>(`/api/v1/operator/learning/${encodeURIComponent(agent)}/${action}`,{method:'POST',jsonBody:{},admin:true,actor,...ids});
+      reply.header('x-request-id',ids.requestId); return result;
+    });
+  }
+
   app.post('/portal-api/rules/custom',async (request,reply)=>{
     const actor=requireSession(request); requireOperator(actor);
     const ids=requireOperationId(request as unknown as {headers:Record<string,unknown>});
@@ -115,8 +144,6 @@ export async function registerRuleRoutes(app:FastifyInstance,deps:Dependencies){
     return reply.code(201).send(published);
   });
 
-  // RM3.2: explicit finding semantics. These coexist with the older proxy
-  // routes in server.ts so already-deployed clients remain compatible.
   app.post('/portal-api/findings/:finding/dismiss',async (request,reply)=>{
     const actor=requireSession(request); requireOperator(actor);
     const {finding}=request.params as {finding:string}; const reason=reasonFrom(request.body);
