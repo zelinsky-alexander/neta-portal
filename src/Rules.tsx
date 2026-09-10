@@ -7,6 +7,9 @@ type Rule={id:string;revision:number;origin:'DEFAULT'|'CUSTOM';engineRuleId:stri
 type RuleSetSummary={revision:number;version:string;sha256:string;publishedAt:string};
 type Catalog={items:Rule[];activeRuleSet:RuleSetSummary|null};
 type RuleOverride={overrideId:number;scopeType:'ENDPOINT'|'GROUP'|'GLOBAL';scopeId:string|null;ruleId:string;enabledOverride:boolean|null;parametersPatch:Record<string,unknown>;exclusionsPatch:Record<string,unknown>;status:'STAGED'|'APPROVED'|'RETIRED';sourceFeedbackId:number|null;reason:string;createdBy:string;createdAt:string;approvedAt:string|null;endpointName:string|null};
+type LearningState={agentId:string;endpointName:string;mode:'OFF'|'LEARNING'|'READY_FOR_REVIEW';startedAt:string|null;learningUntil:string|null;minimumObservations:number;updatedAt:string|null;candidateCount:number;maxObservations:number};
+type BaselineCandidate={candidateId:number;agentId:string;endpointName:string;ruleId:string|null;candidateType:string;candidateKey:string;evidenceJson:string;observationCount:number;firstSeen:string;lastSeen:string;status:string;readyForReview:boolean};
+type LearningOverview={states:LearningState[];candidates:BaselineCandidate[]};
 type ApiError={error?:string};
 type Editor={id:string;engineRuleId:string;name:string;severity:string;enabled:boolean;parameters:string;exclude:string};
 
@@ -40,7 +43,7 @@ async function mutate<T>(method:'POST'|'PUT',path:string,body:unknown,session:Se
   if(!r.ok){const b=await r.json().catch(()=>({} as ApiError)) as ApiError;throw new Error(b.error??`HTTP ${r.status}`);}return r.json() as Promise<T>;
 }
 function canWrite(session:Session){return session.role==='OPERATOR'||session.role==='ADMIN';}
-function badge(value:string){const n=value.toLowerCase();const tone=n==='default'?'muted':n==='custom'||n==='approved'?'ok':n==='high'||n==='retired'?'danger':n==='medium'||n==='staged'?'warn':'muted';return <span className={`badge ${tone}`}>{value}</span>;}
+function badge(value:string){const n=value.toLowerCase();const tone=n==='default'?'muted':n==='custom'||n==='approved'||n==='learning'?'ok':n==='high'||n==='retired'?'danger':n==='medium'||n==='staged'||n==='ready_for_review'?'warn':'muted';return <span className={`badge ${tone}`}>{value}</span>;}
 function pretty(value:Record<string,unknown>){return JSON.stringify(value,null,2);}
 function displayRuleId(id:string){return id.startsWith('NETA-')?id.slice(5):id;}
 function emptyEditor():Editor{return{id:'',engineRuleId:'NETA-BEH-001',name:'',severity:'medium',enabled:true,parameters:'{}',exclude:'{}'};}
@@ -53,10 +56,14 @@ export default function Rules({session}:{session:Session}){
   const q=useQuery({queryKey:['rules'],queryFn:getCatalog,refetchInterval:15000});
   const writable=canWrite(session);
   const overrides=useQuery({queryKey:['rule-overrides'],queryFn:()=>getJson<RuleOverride[]>('/rule-overrides'),enabled:writable,refetchInterval:15000});
+  const learning=useQuery({queryKey:['learning'],queryFn:()=>getJson<LearningOverview>('/learning'),enabled:writable,refetchInterval:10000});
   const[editor,setEditor]=useState<Editor>(emptyEditor());
   const[mode,setMode]=useState<'create'|'edit'>('create');
   const[editingId,setEditingId]=useState('');
   const[notice,setNotice]=useState('');
+  const[learningAgent,setLearningAgent]=useState('');
+  const[learningMinimum,setLearningMinimum]=useState(5);
+  const[learningHours,setLearningHours]=useState(24);
   const byId=useMemo(()=>new Map((q.data?.items??[]).map(r=>[r.id,r])),[q.data]);
   const availableEngines=useMemo(()=>customEngines.filter(id=>byId.has(id)),[byId]);
   const editingRule=mode==='edit'?byId.get(editingId):undefined;
@@ -95,12 +102,18 @@ export default function Rules({session}:{session:Session}){
     mutationFn:({id,action}:{id:number;action:'approve'|'retire'})=>mutate<RuleOverride>('POST',`/rule-overrides/${id}/${action}`,{},session),
     onSuccess:async r=>{setNotice(`${displayRuleId(r.ruleId)} override #${r.overrideId} is now ${r.status}. Endpoint ${r.endpointName??r.scopeId??'-'} has a new desired effective rule hash and must run rules-update.`);await Promise.all([qc.invalidateQueries({queryKey:['rule-overrides']}),qc.invalidateQueries({queryKey:['rules']})]);}
   });
+  const learningAction=useMutation({
+    mutationFn:({agent,action}:{agent:string;action:'start'|'review'|'off'})=>mutate<LearningState>('POST',`/learning/${encodeURIComponent(agent)}/${action}`,action==='start'?{minimumObservations:learningMinimum,hours:learningHours}:{},session),
+    onSuccess:async r=>{setLearningAgent(r.agentId);setNotice(`Learning for ${r.endpointName||r.agentId} is ${r.mode}. Candidates are observation-only and do not alter detection policy.`);await qc.invalidateQueries({queryKey:['learning']});}
+  });
 
   if(q.isLoading)return <main><header className="page-header"><div><h1>Rules</h1><p>Central detection policy</p></div></header><div className="panel loading">Loading…</div></main>;
   if(q.error)return <main><header className="page-header"><div><h1>Rules</h1><p>Central detection policy</p></div></header><div className="panel error-panel"><strong>Unable to load rules</strong><span>{(q.error as Error).message}</span></div></main>;
   const active=q.data?.activeRuleSet;
   const staged=(overrides.data??[]).filter(o=>o.status==='STAGED');
   const approved=(overrides.data??[]).filter(o=>o.status==='APPROVED');
+  const learningStates=learning.data?.states??[];
+  const learningCandidates=learning.data?.candidates??[];
   return <main>
     <header className="page-header"><div><h1>Rules</h1><p>Unified performance, trust, process, network, DNS, TLS, route and behavior rules managed centrally</p></div></header>
     <div className="cards">
@@ -113,6 +126,22 @@ export default function Rules({session}:{session:Session}){
     <div className="notice" style={{marginBottom:'16px'}}>Per-rule exclusions skip evaluation/reporting when any configured process, path, user, destination, domain, port or direction matches. Approved endpoint tuning is layered over the published base bundle only for the selected endpoint.</div>
     {notice&&<div className="notice" style={{marginBottom:'16px'}}>{notice}</div>}
     {!writable&&<div className="notice danger-notice" style={{marginBottom:'16px'}}>Your {session.role} role is read-only. OPERATOR or ADMIN is required to modify and publish rules.</div>}
+
+    {writable&&<div className="panel table-panel" style={{marginBottom:'16px'}}>
+      <div className="toolbar" style={{padding:'14px 16px',flexWrap:'wrap'}}><strong>RM3.4 learning mode</strong><span style={{opacity:.7}}>Observe → aggregate → review. No automatic trust or suppression.</span></div>
+      <div className="toolbar" style={{padding:'0 16px 14px',flexWrap:'wrap'}}>
+        <input value={learningAgent} onChange={e=>setLearningAgent(e.target.value)} placeholder="Agent ID"/>
+        <label style={{display:'flex',alignItems:'center',gap:'6px'}}>Min observations<input type="number" min={2} max={1000} value={learningMinimum} onChange={e=>setLearningMinimum(Number(e.target.value))} style={{minWidth:'90px',width:'90px'}}/></label>
+        <label style={{display:'flex',alignItems:'center',gap:'6px'}}>Hours<input type="number" min={1} max={720} value={learningHours} onChange={e=>setLearningHours(Number(e.target.value))} style={{minWidth:'90px',width:'90px'}}/></label>
+        <button type="button" disabled={!learningAgent.trim()||learningAction.isPending} onClick={()=>learningAction.mutate({agent:learningAgent.trim(),action:'start'})}>Start learning</button>
+      </div>
+      {learning.isLoading?<div className="loading" style={{padding:'16px'}}>Loading learning state…</div>:learning.error?<div className="login-error" style={{padding:'16px'}}>{(learning.error as Error).message}</div>:<>
+        {learningStates.length>0&&<div className="table-wrap"><table><thead><tr><th>Endpoint</th><th>Mode</th><th>Threshold</th><th>Candidates</th><th>Max observations</th><th>Window ends</th><th>Action</th></tr></thead><tbody>{learningStates.map(s=><tr key={s.agentId}><td>{s.endpointName}<div className="mono" style={{opacity:.65}}>{s.agentId}</div></td><td>{badge(s.mode)}</td><td>{s.minimumObservations}</td><td>{s.candidateCount}</td><td>{s.maxObservations}</td><td>{s.learningUntil?new Date(s.learningUntil).toLocaleString():'-'}</td><td><div className="row-actions">{s.mode==='LEARNING'&&<button type="button" className="secondary small" onClick={()=>learningAction.mutate({agent:s.agentId,action:'review'})}>Review now</button>}{s.mode!=='OFF'&&<button type="button" className="secondary small" onClick={()=>learningAction.mutate({agent:s.agentId,action:'off'})}>Stop</button>}{s.mode==='OFF'&&<button type="button" className="secondary small" onClick={()=>{setLearningAgent(s.agentId);learningAction.mutate({agent:s.agentId,action:'start'});}}>Restart</button>}</div></td></tr>)}</tbody></table></div>}
+        <div className="table-summary">Baseline candidates {learningCandidates.length}. Candidates are review-only; RM3.5 will add analyst promotion.</div>
+        {learningCandidates.length===0?<div className="notice" style={{margin:'0 16px 16px'}}>No learning candidates yet. Start learning on an endpoint and let repeated findings/observations accumulate.</div>:<div className="table-wrap"><table><thead><tr><th>Endpoint</th><th>Type</th><th>Candidate</th><th>Rule</th><th>Observations</th><th>Ready</th><th>Last seen</th></tr></thead><tbody>{learningCandidates.map(c=><tr key={c.candidateId}><td>{c.endpointName}</td><td>{c.candidateType}</td><td className="mono">{c.candidateKey}</td><td className="mono">{c.ruleId?displayRuleId(c.ruleId):'-'}</td><td>{c.observationCount}</td><td>{c.readyForReview?badge('READY_FOR_REVIEW'):'-'}</td><td>{new Date(c.lastSeen).toLocaleString()}</td></tr>)}</tbody></table></div>}
+      </>}
+      {learningAction.error&&<div className="login-error" style={{padding:'12px 16px'}}>{(learningAction.error as Error).message}</div>}
+    </div>}
 
     {writable&&<div className="panel table-panel" style={{marginBottom:'16px'}}>
       <div className="toolbar" style={{padding:'14px 16px'}}><strong>Endpoint tuning review</strong><span style={{opacity:.7}}>Staged {staged.length} · Approved {approved.length}</span></div>
