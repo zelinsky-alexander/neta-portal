@@ -63,6 +63,17 @@ export async function registerRuleRoutes(app:FastifyInstance,deps:Dependencies){
     return coordinator.requestJson<unknown>(`/api/v1/findings/${encodeURIComponent(finding)}/confidence`,{actor});
   });
 
+  app.get('/portal-api/artifacts/evidence',async request=>{
+    const actor=requireSession(request);
+    const query=request.query as Record<string,string|undefined>;
+    const params=new URLSearchParams();
+    const limit=Math.max(1,Math.min(500,Number.parseInt(query.limit??'100',10)||100));
+    params.set('limit',String(limit));
+    if(query.agentId)params.set('agentId',query.agentId);
+    if(query.state)params.set('state',query.state);
+    return coordinator.requestJson<unknown>(`/api/v1/artifacts/evidence?${params}`,{actor});
+  });
+
   app.get('/portal-api/rule-overrides',async request=>{
     const actor=requireSession(request); requireOperator(actor);
     return coordinator.requestJson<unknown>('/api/v1/operator/rule-overrides',{admin:true,actor});
