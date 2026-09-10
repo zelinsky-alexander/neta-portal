@@ -113,6 +113,20 @@ export async function registerRuleRoutes(app:FastifyInstance,deps:Dependencies){
     });
   }
 
+  for(const action of ['approve','reject'] as const){
+    app.post(`/portal-api/baselines/:id/${action}`,async (request,reply)=>{
+      const actor=requireSession(request); requireOperator(actor);
+      const {id}=request.params as {id:string};
+      const reason=reasonFrom(request.body);
+      const ids=requireOperationId(request as unknown as {headers:Record<string,unknown>});
+      const result=await coordinator.requestJson<unknown>(`/api/v1/operator/baselines/${encodeURIComponent(id)}/${action}`,{
+        method:'POST',jsonBody:{reason},admin:true,actor,...ids
+      });
+      reply.header('x-request-id',ids.requestId);
+      return result;
+    });
+  }
+
   app.post('/portal-api/rules/custom',async (request,reply)=>{
     const actor=requireSession(request); requireOperator(actor);
     const ids=requireOperationId(request as unknown as {headers:Record<string,unknown>});
