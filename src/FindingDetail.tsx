@@ -19,6 +19,13 @@ type ConfidenceData = {
   findingId:string; ruleId:string|null; severity:string|null; score:number|null; level:string|null;
   corroborationCount:number; corroboratedBy:string[]; reasons:string[];
 };
+type ArtifactEvidenceItem={
+  evidenceId:number; agentId:string; endpointName:string; messageId:string|null;
+  artifactSha256:string; artifactPath:string; artifactSize:number|null; providerName:string;
+  providerVersion:string; rulesetId:string; rulesetSha256:string; scanState:string; detail:string;
+  matches:unknown; observedAt:string|null; firstSeen:string; lastSeen:string; observationCount:number;
+};
+type ArtifactEvidencePage={items:ArtifactEvidenceItem[];count:number;limit:number};
 type ResolutionAction='dismiss'|'suppress'|'tune';
 type TuneScope='ENDPOINT'|'GROUP'|'GLOBAL';
 type TuneAction='NONE'|'PROPOSE_RULE_EXCLUSION'|'PROPOSE_BASELINE';
@@ -34,7 +41,7 @@ async function postJson<T>(path:string,body:unknown,session:Session,key:string):
 function allowed(session:Session){return session.role==='OPERATOR'||session.role==='ADMIN';}
 function pretty(value:unknown){return JSON.stringify(value??null,null,2);}
 function value(v:string|null|undefined){return v&&v.trim()?v:'-';}
-function statusTone(v:string){const n=v.toLowerCase();return n.includes('critical')||n.includes('high')||n.includes('suspicious')?'danger':n.includes('medium')||n.includes('changed')?'warn':n.includes('active')||n.includes('low')?'ok':'muted';}
+function statusTone(v:string){const n=v.toLowerCase();return n.includes('critical')||n.includes('high')||n.includes('suspicious')||n==='match'?'danger':n.includes('medium')||n.includes('changed')||n.includes('scan_error')?'warn':n.includes('active')||n.includes('low')||n==='no_match'?'ok':'muted';}
 function Badge({value:v}:{value:string}){return <span className={`badge ${statusTone(v)}`}>{v||'UNKNOWN'}</span>;}
 function Field({label,value:v,mono=false,wide=false}:{label:string;value:React.ReactNode;mono?:boolean;wide?:boolean}){return <div className={`detail ${wide?'wide':''}`}><span>{label}</span><div className={mono?'mono':''}>{v}</div></div>;}
 
@@ -45,6 +52,7 @@ export default function FindingDetail({session}:{session:Session}){
   const[tuneAction,setTuneAction]=useState<TuneAction>('PROPOSE_RULE_EXCLUSION');
   const q=useQuery({queryKey:['finding-detail',finding],queryFn:()=>getJson<FindingDetailData>(`/findings/${encodeURIComponent(finding)}`),enabled:Boolean(finding)});
   const confidence=useQuery({queryKey:['finding-confidence',finding],queryFn:()=>getJson<ConfidenceData>(`/findings/${encodeURIComponent(finding)}/confidence`),enabled:Boolean(finding)});
+  const artifacts=useQuery({queryKey:['artifact-evidence',q.data?.agentId],queryFn:()=>getJson<ArtifactEvidencePage>(`/artifacts/evidence?agentId=${encodeURIComponent(q.data!.agentId)}&limit=20`),enabled:Boolean(q.data?.agentId),refetchInterval:10000});
   const mutation=useMutation({
     mutationFn:({action}:{action:ResolutionAction})=>{
       const body=action==='tune'?{reason,scope,action:tuneAction}:{reason};
@@ -97,6 +105,11 @@ export default function FindingDetail({session}:{session:Session}){
         <div className="notice" style={{marginTop:'12px'}}>Confidence is deterministic and explainable. Severity represents impact; confidence represents evidence strength. Independent rule matches are correlated only within a bounded 120-second window on the same process subject or network target.</div>
         <ul>{c.reasons.map((r,i)=><li key={i}>{r}</li>)}</ul>
       </>}
+    </div>
+
+    <div className="panel table-panel">
+      <div className="toolbar" style={{padding:'14px 16px'}}><strong>RM4 artifact evidence</strong><span style={{opacity:.7}}>Recent normalized YARA-X / antimalware evidence from this endpoint</span></div>
+      {artifacts.isLoading?<div className="loading" style={{padding:'16px'}}>Loading artifact evidence…</div>:artifacts.error?<div className="notice danger-notice" style={{margin:'0 16px 16px'}}>{(artifacts.error as Error).message}</div>:(artifacts.data?.items.length??0)===0?<div className="notice" style={{margin:'0 16px 16px'}}>No persisted artifact evidence has reached the coordinator for this endpoint yet.</div>:<div className="table-wrap"><table><thead><tr><th>State</th><th>Artifact</th><th>Provider</th><th>YARA ruleset</th><th>Matches</th><th>Seen</th></tr></thead><tbody>{artifacts.data?.items.map(a=><tr key={a.evidenceId}><td><Badge value={a.scanState}/></td><td><div className="mono">{a.artifactPath||'-'}</div><div className="mono" style={{opacity:.65}}>{a.artifactSha256.slice(0,20)}…</div></td><td>{a.providerName}<div style={{opacity:.65}}>{a.providerVersion||'-'}</div></td><td>{a.rulesetId||'-'}<div className="mono" style={{opacity:.65}}>{a.rulesetSha256?a.rulesetSha256.slice(0,16)+'…':'-'}</div></td><td><code>{pretty(a.matches)}</code></td><td>{a.observationCount}×<div style={{opacity:.65}}>{new Date(a.lastSeen).toLocaleString()}</div></td></tr>)}</tbody></table></div>}
     </div>
 
     <div className="panel action-form">
