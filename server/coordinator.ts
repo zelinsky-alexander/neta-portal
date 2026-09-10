@@ -14,8 +14,9 @@ export class CoordinatorError extends Error {
 }
 
 type RequestInit = {
-  method?: 'GET' | 'POST';
+  method?: 'GET' | 'POST' | 'PUT';
   body?: URLSearchParams;
+  jsonBody?: unknown;
   admin?: boolean;
   idempotencyKey?: string;
   requestId?: string;
@@ -27,13 +28,13 @@ export class CoordinatorClient {
 
   async request(path: string, init: RequestInit = {}): Promise<string> {
     const target = new URL(path, this.config.coordinatorUrl);
-    const body = init.body?.toString();
+    const body = init.jsonBody !== undefined ? JSON.stringify(init.jsonBody) : init.body?.toString();
     const headers: Record<string, string> = {
       accept: 'application/json, text/plain;q=0.9',
       'user-agent': 'neta-portal/0.3.0'
     };
     if (body) {
-      headers['content-type'] = 'application/x-www-form-urlencoded';
+      headers['content-type'] = init.jsonBody !== undefined ? 'application/json' : 'application/x-www-form-urlencoded';
       headers['content-length'] = Buffer.byteLength(body).toString();
     }
     if (init.idempotencyKey) headers['idempotency-key'] = init.idempotencyKey;
@@ -73,8 +74,9 @@ export class CoordinatorClient {
           if (status < 200 || status >= 300) {
             let message = `Coordinator returned HTTP ${status}`;
             try {
-              const parsed = JSON.parse(responseBody) as { error?: string };
+              const parsed = JSON.parse(responseBody) as { error?: string; message?: string };
               if (parsed.error) message = parsed.error;
+              else if (parsed.message) message = parsed.message;
             } catch { /* preserve HTTP status message */ }
             reject(new CoordinatorError(message, status, responseBody));
             return;

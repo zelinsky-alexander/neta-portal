@@ -9,6 +9,7 @@ import { CoordinatorClient, CoordinatorError } from './coordinator.js';
 import { authenticate, can, clearSessionCookie, cookieValue, createSession, scopesFor, sessionCookie, verifySession, type PortalRole, type PortalSession } from './auth.js';
 import { parseAgents, parseCertificates, parseFindingSearch, parseKeyValues, parseMetricBlock, parseUpgrades } from './parsers.js';
 import { requireIdempotencyKey, validateReason, validateRotation, validateUpgrade } from './mutations.js';
+import { registerRuleRoutes } from './rules.js';
 
 const config = loadConfig();
 const coordinator = new CoordinatorClient(config);
@@ -102,6 +103,8 @@ function networkSubject(host?: string | null, port?: number | null): string {
   if (!host) return '-';
   return port == null ? host : `${host}:${port}`;
 }
+
+await registerRuleRoutes(app,{coordinator,requireSession:currentSession,requireOperationId:operationHeaders});
 
 app.get('/portal-api/health', async () => ({ status: 'UP' }));
 
@@ -233,7 +236,14 @@ app.get('/portal-api/dashboard', async (request) => {
   const [summary,health]=await Promise.all([coordinator.requestJson<FleetSummary>('/api/v1/fleet/summary',{actor}),coordinator.requestJson<{status?:string}>('/actuator/health')]); return {...summary,coordinator:{status:health.status??'UNKNOWN'},compatibilityMode:false};
 });
 
-app.setErrorHandler((error,_request,reply)=>{if(error instanceof CoordinatorError)return reply.code(error.statusCode>=400&&error.statusCode<600?error.statusCode:502).send({error:error.message,coordinatorResponse:error.body||undefined});app.log.error(error);return reply.code(502).send({error:'Portal could not complete the coordinator request'});});
+app.setErrorHandler((error,_request,reply)=>{
+  if(error instanceof CoordinatorError)return reply.code(error.statusCode>=400&&error.statusCode<600?error.statusCode:502).send({error:error.message,coordinatorResponse:error.body||undefined});
+  const typed=error as {statusCode?:number;message?:string};
+  const status=typed.statusCode;
+  if(status&&status>=400&&status<600)return reply.code(status).send({error:typed.message??'request failed'});
+  app.log.error(error);
+  return reply.code(502).send({error:'Portal could not complete the coordinator request'});
+});
 
 const __dirname=path.dirname(fileURLToPath(import.meta.url)); const dist=path.resolve(__dirname,'../dist'); await app.register(fastifyStatic,{root:dist,wildcard:false});
 app.setNotFoundHandler((request,reply)=>request.url.startsWith('/portal-api/')?reply.code(404).send({error:'not found'}):reply.sendFile('index.html'));

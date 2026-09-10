@@ -6,6 +6,10 @@ export type UpgradeMutation = {
 };
 
 export type ReasonMutation = { reason: string };
+export type FindingTuneMutation = ReasonMutation & {
+  scope: 'ENDPOINT' | 'GROUP' | 'GLOBAL';
+  action: 'NONE' | 'PROPOSE_RULE_EXCLUSION' | 'PROPOSE_BASELINE';
+};
 export type RotateCertificateMutation = ReasonMutation & { csr: string };
 
 function required(value: unknown, name: string, max = 500): string {
@@ -30,6 +34,16 @@ export function validateUpgrade(body: unknown): UpgradeMutation {
 export function validateReason(body: unknown): ReasonMutation {
   const value = (body ?? {}) as Record<string, unknown>;
   return { reason: required(value.reason, 'reason', 500) };
+}
+
+export function validateFindingTune(body: unknown): FindingTuneMutation {
+  const value = (body ?? {}) as Record<string, unknown>;
+  const scope = value.scope === 'ENDPOINT' || value.scope === 'GROUP' || value.scope === 'GLOBAL' ? value.scope : null;
+  if (!scope) throw new Error('scope must be ENDPOINT, GROUP, or GLOBAL');
+  const action = value.action === 'NONE' || value.action === 'PROPOSE_RULE_EXCLUSION' || value.action === 'PROPOSE_BASELINE' ? value.action : null;
+  if (!action) throw new Error('action must be NONE, PROPOSE_RULE_EXCLUSION, or PROPOSE_BASELINE');
+  if (scope === 'GROUP' && action !== 'NONE') throw new Error('group-scoped tuning is not available yet');
+  return { reason: required(value.reason, 'reason', 1000), scope, action };
 }
 
 export function validateRotation(body: unknown): RotateCertificateMutation {
