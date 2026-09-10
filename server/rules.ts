@@ -74,6 +74,25 @@ export async function registerRuleRoutes(app:FastifyInstance,deps:Dependencies){
     return coordinator.requestJson<unknown>(`/api/v1/artifacts/evidence?${params}`,{actor});
   });
 
+  app.get('/portal-api/yarax/runtime',async request=>{
+    const actor=requireSession(request); requireOperator(actor);
+    return coordinator.requestJson<unknown>('/api/v1/operator/yarax/runtime',{admin:true,actor});
+  });
+
+  app.post('/portal-api/yarax/runtime/rollout',async (request,reply)=>{
+    const actor=requireSession(request); requireOperator(actor);
+    const body=bodyObject(request.body);
+    const version=typeof body.version==='string'?body.version.trim():'';
+    const rolloutPercent=Number(body.rolloutPercent);
+    if(!version) throw Object.assign(new Error('version is required'),{statusCode:400});
+    if(!Number.isInteger(rolloutPercent)||rolloutPercent<0||rolloutPercent>100) throw Object.assign(new Error('rolloutPercent must be 0..100'),{statusCode:400});
+    const ids=requireOperationId(request as unknown as {headers:Record<string,unknown>});
+    const result=await coordinator.requestJson<unknown>('/api/v1/operator/yarax/runtime/rollout',{
+      method:'POST',jsonBody:{version,rolloutPercent},admin:true,actor,...ids
+    });
+    reply.header('x-request-id',ids.requestId); return result;
+  });
+
   app.get('/portal-api/rule-overrides',async request=>{
     const actor=requireSession(request); requireOperator(actor);
     return coordinator.requestJson<unknown>('/api/v1/operator/rule-overrides',{admin:true,actor});
