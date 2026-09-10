@@ -120,7 +120,7 @@ export default function FindingDetail({session}:{session:Session}){
         </select></label>
       </div>
       <div className="notice" style={{marginTop:'10px'}}>
-        {tuneAction==='PROPOSE_RULE_EXCLUSION'&&<>Proposed exclusion will be derived from the narrowest safe evidence available in this finding. For <span className="mono">NETA-PROC-002</span>, that means the observed parent process name.</>}
+        {tuneAction==='PROPOSE_RULE_EXCLUSION'&&<>Proposed exclusion will be derived from the narrowest safe evidence available in this finding. For <span className="mono">PROC-002</span>, that means the observed parent process name.</>}
         {tuneAction==='PROPOSE_BASELINE'&&<>A process parent → child baseline candidate will be staged for this endpoint. It will not become trusted automatically.</>}
         {tuneAction==='NONE'&&<>Only analyst feedback is retained. No suppression, exclusion, or baseline proposal is created.</>}
       </div>
