@@ -26,6 +26,9 @@ type Dependencies = {
 function requireOperator(session:PortalSession){
   if(!can(session.role,'OPERATOR')) throw Object.assign(new Error('requires OPERATOR role'),{statusCode:403});
 }
+function requireAdmin(session:PortalSession){
+  if(!can(session.role,'ADMIN')) throw Object.assign(new Error('requires ADMIN role'),{statusCode:403});
+}
 
 function bodyObject(value:unknown):Record<string,unknown>{
   if(!value||typeof value!=='object'||Array.isArray(value)) throw Object.assign(new Error('JSON object body is required'),{statusCode:400});
@@ -89,6 +92,42 @@ export async function registerRuleRoutes(app:FastifyInstance,deps:Dependencies){
     const ids=requireOperationId(request as unknown as {headers:Record<string,unknown>});
     const result=await coordinator.requestJson<unknown>('/api/v1/operator/yarax/runtime/rollout',{
       method:'POST',jsonBody:{version,rolloutPercent},admin:true,actor,...ids
+    });
+    reply.header('x-request-id',ids.requestId); return result;
+  });
+
+  app.get('/portal-api/yarax/content',async request=>{
+    const actor=requireSession(request); requireOperator(actor);
+    return coordinator.requestJson<unknown>('/api/v1/operator/yarax/content',{admin:true,actor});
+  });
+
+  app.post('/portal-api/yarax/content/publish',{bodyLimit:1024*1024+32*1024},async (request,reply)=>{
+    const actor=requireSession(request); requireAdmin(actor);
+    const body=bodyObject(request.body);
+    const bundleId=typeof body.bundleId==='string'?body.bundleId.trim():'';
+    const content=typeof body.content==='string'?body.content:'';
+    const rolloutPercent=Number(body.rolloutPercent??5);
+    if(!/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(bundleId)) throw Object.assign(new Error('bundleId must use letters, digits, dot, underscore, or dash'),{statusCode:400});
+    if(!content.trim()) throw Object.assign(new Error('YARA content is required'),{statusCode:400});
+    if(Buffer.byteLength(content,'utf8')>1024*1024) throw Object.assign(new Error('YARA content must be at most 1 MiB'),{statusCode:400});
+    if(!Number.isInteger(rolloutPercent)||rolloutPercent<0||rolloutPercent>100) throw Object.assign(new Error('rolloutPercent must be 0..100'),{statusCode:400});
+    const ids=requireOperationId(request as unknown as {headers:Record<string,unknown>});
+    const result=await coordinator.requestJson<unknown>('/api/v1/operator/yarax/content/publish',{
+      method:'POST',jsonBody:{bundleId,content,rolloutPercent},admin:true,actor,...ids
+    });
+    reply.header('x-request-id',ids.requestId); return result;
+  });
+
+  app.post('/portal-api/yarax/content/rollout',async (request,reply)=>{
+    const actor=requireSession(request); requireAdmin(actor);
+    const body=bodyObject(request.body);
+    const bundleId=typeof body.bundleId==='string'?body.bundleId.trim():'';
+    const rolloutPercent=Number(body.rolloutPercent);
+    if(!bundleId) throw Object.assign(new Error('bundleId is required'),{statusCode:400});
+    if(!Number.isInteger(rolloutPercent)||rolloutPercent<0||rolloutPercent>100) throw Object.assign(new Error('rolloutPercent must be 0..100'),{statusCode:400});
+    const ids=requireOperationId(request as unknown as {headers:Record<string,unknown>});
+    const result=await coordinator.requestJson<unknown>('/api/v1/operator/yarax/content/rollout',{
+      method:'POST',jsonBody:{bundleId,rolloutPercent},admin:true,actor,...ids
     });
     reply.header('x-request-id',ids.requestId); return result;
   });
