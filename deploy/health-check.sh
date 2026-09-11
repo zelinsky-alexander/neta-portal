@@ -35,11 +35,28 @@ if [[ ! -f docker-compose.yml ]]; then
 fi
 
 compose=(docker compose --env-file .env -f docker-compose.yml)
-portal_state="$("${compose[@]}" ps --format json portal 2>/dev/null || true)"
-if grep -q '"State":"running"' <<<"$portal_state" && grep -q '"Health":"healthy"' <<<"$portal_state"; then
+
+# A freshly created container may already serve /portal-api/health while Docker's
+# HEALTHCHECK is still in its start period. Wait for Docker to converge before
+# evaluating the production health state so a healthy startup is not reported as
+# a false failure merely because this script ran immediately after `compose up`.
+portal_container_id="$("${compose[@]}" ps -q portal 2>/dev/null || true)"
+portal_runtime_state=""
+portal_health_state=""
+if [[ -n "$portal_container_id" ]]; then
+  for _ in {1..30}; do
+    portal_runtime_state="$(docker inspect -f '{{.State.Status}}' "$portal_container_id" 2>/dev/null || true)"
+    portal_health_state="$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{end}}' "$portal_container_id" 2>/dev/null || true)"
+    [[ "$portal_runtime_state" == "running" && "$portal_health_state" == "healthy" ]] && break
+    [[ "$portal_runtime_state" == "exited" || "$portal_runtime_state" == "dead" ]] && break
+    sleep 2
+  done
+fi
+
+if [[ "$portal_runtime_state" == "running" && "$portal_health_state" == "healthy" ]]; then
   pass "portal container: running and healthy"
 else
-  failed "portal container is not running and healthy"
+  failed "portal container is not running and healthy (state=${portal_runtime_state:-unknown}, health=${portal_health_state:-unknown})"
 fi
 
 coordinator_url="$("${compose[@]}" exec -T portal printenv NETA_COORDINATOR_URL 2>/dev/null || true)"
