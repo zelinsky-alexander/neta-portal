@@ -8,7 +8,7 @@ import { loadConfig } from './config.js';
 import { CoordinatorClient, CoordinatorError } from './coordinator.js';
 import { authenticate, can, clearSessionCookie, cookieValue, createSession, scopesFor, sessionCookie, verifySession, type PortalRole, type PortalSession } from './auth.js';
 import { parseAgents, parseCertificates, parseFindingSearch, parseKeyValues, parseMetricBlock, parseUpgrades } from './parsers.js';
-import { requireIdempotencyKey, validateReason, validateRotation, validateUpgrade } from './mutations.js';
+import { requireIdempotencyKey, validateFindingBulk, validateReason, validateRotation, validateUpgrade } from './mutations.js';
 import { registerRuleRoutes } from './rules.js';
 
 const config = loadConfig();
@@ -19,6 +19,8 @@ type Page<T> = { items: T[]; nextCursor: string | null };
 type AgentJson = { id: string; name: string; state: string; lastSeen: string | null; version: string | null; build: string | null; gitCommit: string | null; os: string | null; arch: string | null; artifactSha256: string | null; protocolVersion: number | null; schemaVersion: number | null; features: string | null; certificateSha256: string | null; enrolledAt: string | null; lastSequence: number };
 type FindingJson = { id: string; agentId: string; agentName: string; subject: string | null; subjectType: string | null; subjectId: string | null; host: string | null; port: number | null; type: string | null; severity: string | null; confidence: string | null; assessment: string | null; trust: string | null; performance: string | null; count: number; status: string | null; firstSeen: string | null; lastSeen: string | null; incidentId: string | null };
 type FindingDetailJson = { id:string; findingKey:string; messageId:string; agentId:string; agentName:string; subject:string; subjectType:string|null; subjectId:string|null; host:string|null; port:number|null; type:string; ruleId:string|null; severity:string; confidence:string; assessment:string; trust:string|null; performance:string|null; status:string; count:number; firstSeen:string|null; lastSeen:string|null; receivedAt:string|null; observedFrom:string|null; observedTo:string|null; incidentId:string|null; evidenceRoot:string|null; changes:unknown; ruleSet:unknown; payload:unknown; protocol:unknown };
+type FindingBulkPreview = { count:number; bySeverity:Record<string,number>; byRule:Record<string,number>; byAgent:Record<string,number> };
+type FindingBulkResult = { action:string; affected:number; message:string };
 type CertificateJson = { agentId: string; agentName: string; agentStatus: string; state: string; fingerprint: string | null; notBefore: string | null; notAfter: string | null; rotatedAt: string | null };
 type UpgradeJson = { id: string; agentId: string; fromVersion: string | null; fromBuild: string | null; targetVersion: string; targetBuild: string; status: string; os: string; arch: string; sourceType: string; sourceRef: string; requestedAt: string; failureCode: string | null; failureMessage: string | null };
 type FleetSummary = { agents: { total: number; online: number; offline: number; linux: number; windows: number }; findings: Record<string, number>; certificates: Record<string, number> };
@@ -90,6 +92,11 @@ function paramsFrom(query: Record<string, string | undefined>, keys: string[], d
   const params = new URLSearchParams();
   params.set('limit', String(clamp(query.limit, 1, 100, defaultLimit)));
   for (const key of keys) if (query[key]) params.set(key, query[key]!);
+  return params;
+}
+function findingFilterParams(values: Record<string, string | undefined>): URLSearchParams {
+  const params = new URLSearchParams();
+  for (const key of ['agent','severity','rule','status','olderThanSeconds']) if (values[key]) params.set(key, values[key]!);
   return params;
 }
 function validation<T>(fn: () => T): T {
@@ -170,8 +177,40 @@ app.get('/portal-api/agents/:agent', async (request) => {
 app.get('/portal-api/findings', async (request) => {
   const actor=currentSession(request); const query=request.query as Record<string,string|undefined>;
   if(config.legacyOperatorApi){const params=paramsFrom(query,['agent','trust','performance','status','target'],50);params.set('offset','0');return {...parseFindingSearch(await coordinator.request(`/api/v1/operator/finding-search?${params}`)),nextCursor:null,compatibilityMode:true};}
-  const params=paramsFrom(query,['cursor','agent','trust','performance','status','target']); const page=await coordinator.requestJson<Page<FindingJson>>(`/api/v1/findings?${params}`,{actor});
+  const params=paramsFrom(query,['cursor','agent','trust','performance','status','target','severity','rule','olderThanSeconds']); const page=await coordinator.requestJson<Page<FindingJson>>(`/api/v1/findings?${params}`,{actor});
   return {items:page.items.map((f)=>({id:f.id,lastSeen:f.lastSeen??'-',agent:f.agentName,target:f.subject??networkSubject(f.host,f.port),type:f.type??'-',severity:f.severity??'-',confidence:f.confidence??'-',assessment:f.assessment??'-',count:f.count,status:f.status??'-',incident:f.incidentId??'-'})),nextCursor:page.nextCursor,compatibilityMode:false};
+});
+
+app.get('/portal-api/findings/bulk-preview', async (request) => {
+  const actor=requireRole(request,'OPERATOR');
+  if(config.legacyOperatorApi) throw new CoordinatorError('bulk finding operations require the structured coordinator API',409,'');
+  const query=request.query as Record<string,string|undefined>;
+  const params=findingFilterParams(query);
+  return coordinator.requestJson<FindingBulkPreview>(`/api/v1/operator/finding-bulk-preview?${params}`,{admin:true,actor});
+});
+
+app.post('/portal-api/findings/bulk-resolve', async (request, reply) => {
+  const actor=requireRole(request,'OPERATOR');
+  if(config.legacyOperatorApi) throw new CoordinatorError('bulk finding operations require the structured coordinator API',409,'');
+  const body=validation(()=>validateFindingBulk(request.body));
+  const ids=operationHeaders(request as unknown as {headers:Record<string,unknown>});
+  const params=new URLSearchParams({reason:body.reason});
+  if(body.agent)params.set('agent',body.agent); if(body.severity)params.set('severity',body.severity); if(body.rule)params.set('rule',body.rule); if(body.status)params.set('status',body.status); if(body.olderThanSeconds)params.set('olderThanSeconds',String(body.olderThanSeconds));
+  const result=await coordinator.requestJson<FindingBulkResult>('/api/v1/operator/finding-bulk-resolve',{method:'POST',body:params,admin:true,actor,...ids});
+  reply.header('x-request-id',ids.requestId);
+  return {accepted:true,operation:'FINDINGS_BULK_RESOLVED',requestId:ids.requestId,idempotencyKey:ids.idempotencyKey,idempotencyEnforcedByCoordinator:false,affected:result.affected,message:result.message};
+});
+
+app.post('/portal-api/findings/bulk-purge', async (request, reply) => {
+  const actor=requireRole(request,'ADMIN');
+  if(config.legacyOperatorApi) throw new CoordinatorError('bulk finding operations require the structured coordinator API',409,'');
+  const body=validation(()=>validateFindingBulk(request.body));
+  const ids=operationHeaders(request as unknown as {headers:Record<string,unknown>});
+  const params=new URLSearchParams({reason:body.reason});
+  if(body.agent)params.set('agent',body.agent); if(body.severity)params.set('severity',body.severity); if(body.rule)params.set('rule',body.rule); if(body.status)params.set('status',body.status); if(body.olderThanSeconds)params.set('olderThanSeconds',String(body.olderThanSeconds));
+  const result=await coordinator.requestJson<FindingBulkResult>('/api/v1/operator/finding-bulk-purge',{method:'POST',body:params,admin:true,actor,...ids});
+  reply.header('x-request-id',ids.requestId);
+  return {accepted:true,operation:'FINDINGS_BULK_PURGED',requestId:ids.requestId,idempotencyKey:ids.idempotencyKey,idempotencyEnforcedByCoordinator:false,affected:result.affected,message:result.message};
 });
 
 app.get('/portal-api/findings/:finding', async (request) => {
