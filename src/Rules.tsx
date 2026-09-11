@@ -1,5 +1,6 @@
 import { useMemo, useState, type FormEvent } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import YaraContentSummary from './YaraContentSummary';
 
 type Role='VIEWER'|'OPERATOR'|'ADMIN';
 type Session={authenticated:boolean;user?:string;role?:Role;csrfToken?:string};
@@ -81,6 +82,7 @@ export default function Rules({session}:{session:Session}){
       <div className="metric-card"><div className="metric-title">Active rule set</div><div className="metric-value">{active?.revision??'-'}</div><div className="metric-detail">{active?.version??'Not published yet'}</div></div>
       <div className="metric-card"><div className="metric-title">Active SHA-256</div><div className="metric-value mono" style={{fontSize:'15px'}}>{active?.sha256?.slice(0,16)??'-'}{active?.sha256?'…':''}</div><div className="metric-detail">Base fleet bundle; endpoint effective hashes may differ</div></div>
     </div>
+    <YaraContentSummary/>
     <div className="notice" style={{marginBottom:'16px'}}>Per-rule exclusions skip evaluation/reporting when any configured process, path, user, destination, domain, port or direction matches. Approved endpoint tuning is layered over the published base bundle only for the selected endpoint.</div>
     {notice&&<div className="notice" style={{marginBottom:'16px'}}>{notice}</div>}
     {!writable&&<div className="notice danger-notice" style={{marginBottom:'16px'}}>Your {session.role} role is read-only. OPERATOR or ADMIN is required to modify and publish rules.</div>}
