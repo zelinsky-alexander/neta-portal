@@ -132,6 +132,22 @@ export async function registerRuleRoutes(app:FastifyInstance,deps:Dependencies){
     reply.header('x-request-id',ids.requestId); return result;
   });
 
+  app.post('/portal-api/yarax/content/canary',async (request,reply)=>{
+    const actor=requireSession(request); requireAdmin(actor);
+    const body=bodyObject(request.body);
+    const bundleId=typeof body.bundleId==='string'?body.bundleId.trim():'';
+    const agentId=typeof body.agentId==='string'?body.agentId.trim():'';
+    const enabled=body.enabled===true;
+    if(!bundleId) throw Object.assign(new Error('bundleId is required'),{statusCode:400});
+    if(!agentId) throw Object.assign(new Error('agentId is required'),{statusCode:400});
+    if(typeof body.enabled!=='boolean') throw Object.assign(new Error('enabled must be boolean'),{statusCode:400});
+    const ids=requireOperationId(request as unknown as {headers:Record<string,unknown>});
+    const result=await coordinator.requestJson<unknown>('/api/v1/operator/yarax/content/canary',{
+      method:'POST',jsonBody:{bundleId,agentId,enabled},admin:true,actor,...ids
+    });
+    reply.header('x-request-id',ids.requestId); return result;
+  });
+
   app.get('/portal-api/rule-overrides',async request=>{
     const actor=requireSession(request); requireOperator(actor);
     return coordinator.requestJson<unknown>('/api/v1/operator/rule-overrides',{admin:true,actor});
