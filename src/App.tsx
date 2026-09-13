@@ -196,6 +196,7 @@ function Upgrades({session}:{session:Session}){
   const[source,setSource]=useState('release');
   const[ref,setRef]=useState('');
   const[allowDevelopment,setAllowDevelopment]=useState(true);
+  const[requestOpen,setRequestOpen]=useState(false);
   const[result,setResult]=useState<OperationResult|null>(null);
   const system=useQuery({queryKey:['system'],queryFn:()=>api<SystemInfo>('/system')});
   const agents=useQuery({queryKey:['upgrade-agents'],queryFn:()=>api<PageData<Agent>>('/agents?limit=100'),refetchInterval:5000});
@@ -235,17 +236,19 @@ function Upgrades({session}:{session:Session}){
   }
   return <Page title="Upgrades" subtitle="Coordinator-owned agent upgrade operations">
     {!enabled&&<OperationNotice system={system.data} session={session} required="OPERATOR"/>}
-    <form className="panel action-form" onSubmit={submit}>
-      <h3>Request agent upgrade</h3>
-      <div className="form-grid">
-        <label>Agent{agents.data&&!agents.data.nextCursor&&agents.data.items.length<100?<select value={agent} onChange={e=>setAgent(e.target.value)} required disabled={!enabled||agents.isLoading}><option value="">Select agent</option>{allAgentsAvailable&&<option value="__ALL__">All Agents ({agents.data.items.length})</option>}{agents.data.items.map(a=><option key={a.id} value={a.id}>{a.name}</option>)}</select>:<input value={agent} onChange={e=>setAgent(e.target.value)} required disabled={!enabled} placeholder="Agent ID"/>}</label>
-        <label>Source<select value={source} onChange={e=>setSource(e.target.value)} disabled={!enabled}><option value="release">Release</option><option value="git-ref">Git ref</option></select></label>
-        <label>Reference<input value={ref} onChange={e=>setRef(e.target.value)} required disabled={!enabled}/></label>
-        <label style={{display:'flex',alignItems:'center',gap:'8px',alignSelf:'end',minHeight:'38px',color:'#c5cfdb'}}><input type="checkbox" checked={allowDevelopment} onChange={e=>setAllowDevelopment(e.target.checked)} disabled={!enabled||source!=='git-ref'} style={{minWidth:0,width:'18px',height:'18px',padding:0,margin:0}}/>Allow development build</label>
-      </div>
-      <button disabled={!enabled||!agent||m.isPending}>{m.isPending?'Requesting…':'Review and request'}</button>
-      {m.error&&<div className="login-error">{(m.error as Error).message}</div>}
-    </form>
+    <div className="panel action-form">
+      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',gap:'16px'}}><h3 style={{margin:0}}>Request agent upgrade</h3><FoldArrow open={requestOpen} onClick={()=>setRequestOpen(value=>!value)} label="agent upgrade request"/></div>
+      {requestOpen&&<form onSubmit={submit} style={{marginTop:'18px'}}>
+        <div className="form-grid">
+          <label>Agent{agents.data&&!agents.data.nextCursor&&agents.data.items.length<100?<select value={agent} onChange={e=>setAgent(e.target.value)} required disabled={!enabled||agents.isLoading}><option value="">Select agent</option>{allAgentsAvailable&&<option value="__ALL__">All Agents ({agents.data.items.length})</option>}{agents.data.items.map(a=><option key={a.id} value={a.id}>{a.name}</option>)}</select>:<input value={agent} onChange={e=>setAgent(e.target.value)} required disabled={!enabled} placeholder="Agent ID"/>}</label>
+          <label>Source<select value={source} onChange={e=>setSource(e.target.value)} disabled={!enabled}><option value="release">Release</option><option value="git-ref">Git ref</option></select></label>
+          <label>Reference<input value={ref} onChange={e=>setRef(e.target.value)} required disabled={!enabled}/></label>
+          <label style={{display:'flex',alignItems:'center',gap:'8px',alignSelf:'end',minHeight:'38px',color:'#c5cfdb'}}><input type="checkbox" checked={allowDevelopment} onChange={e=>setAllowDevelopment(e.target.checked)} disabled={!enabled||source!=='git-ref'} style={{minWidth:0,width:'18px',height:'18px',padding:0,margin:0}}/>Allow development build</label>
+        </div>
+        <button disabled={!enabled||!agent||m.isPending}>{m.isPending?'Requesting…':'Review and request'}</button>
+        {m.error&&<div className="login-error">{(m.error as Error).message}</div>}
+      </form>}
+    </div>
     <OperationResultView result={result}/>
     <QueryState loading={q.isLoading} error={q.error as Error|null}><div className="panel table-panel"><div className="table-wrap"><table><thead><tr><th>Agent</th><th>From</th><th>Target</th><th>Status</th><th>Platform</th><th>Source</th><th>Requested</th></tr></thead><tbody>{q.data?.items.map(u=><tr key={u.id}><td>{agentNames.get(u.agent)??u.agent}</td><td>{u.from}</td><td>{u.target}</td><td><StatusBadge value={u.status}/></td><td><Platform value={u.platform} name={agentNames.get(u.agent)??''}/></td><td>{u.source}</td><td>{formatUtc(u.requested)}</td></tr>)}</tbody></table></div></div><Pager nextCursor={q.data?.nextCursor??null} hasPrevious={Boolean(cursor)} onReset={()=>setCursor('')} onNext={()=>q.data?.nextCursor&&setCursor(q.data.nextCursor)}/></QueryState>
   </Page>;
