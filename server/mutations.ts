@@ -15,7 +15,9 @@ export type FindingBulkMutation = ReasonMutation & {
   severity?: string;
   rule?: string;
   status?: string;
+  assessment?: string;
   olderThanSeconds?: number;
+  newerThanSeconds?: number;
 };
 export type RotateCertificateMutation = ReasonMutation & { csr: string };
 
@@ -33,6 +35,15 @@ function optionalText(value: unknown, name: string, max = 256): string | undefin
   if (!result) return undefined;
   if (result.length > max) throw new Error(`${name} must be at most ${max} characters`);
   return result;
+}
+
+function optionalPositiveInteger(value: unknown, name: string): number | undefined {
+  if (value == null || value === '') return undefined;
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || !Number.isInteger(parsed) || parsed <= 0) {
+    throw new Error(`${name} must be a positive integer`);
+  }
+  return parsed;
 }
 
 export function validateUpgrade(body: unknown): UpgradeMutation {
@@ -64,13 +75,10 @@ export function validateFindingTune(body: unknown): FindingTuneMutation {
 
 export function validateFindingBulk(body: unknown): FindingBulkMutation {
   const value = (body ?? {}) as Record<string, unknown>;
-  let olderThanSeconds: number | undefined;
-  if (value.olderThanSeconds != null && value.olderThanSeconds !== '') {
-    const parsed = Number(value.olderThanSeconds);
-    if (!Number.isFinite(parsed) || !Number.isInteger(parsed) || parsed <= 0) {
-      throw new Error('olderThanSeconds must be a positive integer');
-    }
-    olderThanSeconds = parsed;
+  const olderThanSeconds = optionalPositiveInteger(value.olderThanSeconds, 'olderThanSeconds');
+  const newerThanSeconds = optionalPositiveInteger(value.newerThanSeconds, 'newerThanSeconds');
+  if (olderThanSeconds != null && newerThanSeconds != null) {
+    throw new Error('olderThanSeconds and newerThanSeconds are mutually exclusive');
   }
   return {
     reason: required(value.reason, 'reason', 1000),
@@ -78,7 +86,9 @@ export function validateFindingBulk(body: unknown): FindingBulkMutation {
     severity: optionalText(value.severity, 'severity', 32),
     rule: optionalText(value.rule, 'rule', 128),
     status: optionalText(value.status, 'status', 32),
-    olderThanSeconds
+    assessment: optionalText(value.assessment, 'assessment', 64),
+    olderThanSeconds,
+    newerThanSeconds
   };
 }
 
