@@ -74,6 +74,17 @@ function findingFiltersFromSearch(params:URLSearchParams):FindingFilters{const r
 function findingSearchFromFilters(filters:FindingFilters){const params=new URLSearchParams();if(filters.agent)params.set('agent',filters.agent);if(filters.severity)params.set('severity',filters.severity);if(filters.rule)params.set('rule',filters.rule);if(filters.status==='')params.set('status','ALL');else if(filters.status!=='ACTIVE')params.set('status',filters.status);if(filters.assessment)params.set('assessment',filters.assessment);if(filters.olderThanSeconds)params.set('olderThanSeconds',filters.olderThanSeconds);if(filters.newerThanSeconds)params.set('newerThanSeconds',filters.newerThanSeconds);return params;}
 function findingAgeValue(filters:FindingFilters){if(filters.newerThanSeconds)return `newer:${filters.newerThanSeconds}`;if(filters.olderThanSeconds)return `older:${filters.olderThanSeconds}`;return '';}
 function findingAgeLabel(filters:FindingFilters){const seconds=Number(filters.newerThanSeconds||filters.olderThanSeconds);if(!seconds)return 'Any time';const labels:Record<number,string>={3600:'1 hour',86400:'24 hours',604800:'7 days',2592000:'30 days'};const duration=labels[seconds]??`${seconds}s`;return filters.newerThanSeconds?`Within ${duration}`:`Older than ${duration}`;}
+const FINDING_FILTERS_STORAGE='neta.findings.filters.v1';
+const FINDING_FILTERS_OPEN_STORAGE='neta.findings.filters-open.v1';
+const FINDING_BULK_OPEN_STORAGE='neta.findings.bulk-open.v1';
+const defaultFindingFilters:FindingFilters={agent:'',severity:'',rule:'',status:'ACTIVE',assessment:'',olderThanSeconds:'',newerThanSeconds:''};
+function readStoredFindingFilters():FindingFilters|null{try{const raw=sessionStorage.getItem(FINDING_FILTERS_STORAGE);if(!raw)return null;const value=JSON.parse(raw) as Partial<FindingFilters>;return{...defaultFindingFilters,...value};}catch{return null;}}
+function writeStoredFindingFilters(filters:FindingFilters){try{sessionStorage.setItem(FINDING_FILTERS_STORAGE,JSON.stringify(filters));}catch{/* storage may be unavailable */}}
+function readStoredBool(key:string,fallback=false){try{const raw=sessionStorage.getItem(key);return raw==null?fallback:raw==='1';}catch{return fallback;}}
+function writeStoredBool(key:string,value:boolean){try{sessionStorage.setItem(key,value?'1':'0');}catch{/* storage may be unavailable */}}
+function hasFindingSearchState(params:URLSearchParams){return['agent','severity','rule','status','assessment','olderThanSeconds','newerThanSeconds','cursor'].some(key=>params.has(key));}
+async function loadFindingCount(filters:FindingFilters):Promise<number>{let cursor='';let total=0;const seen=new Set<string>();for(let pageNo=0;pageNo<100;pageNo++){const query=new URLSearchParams(findingQuery(filters,cursor));query.set('limit','100');const page=await api<PageData<Finding>>(`/findings?${query}`);total+=page.items.length;if(!page.nextCursor||seen.has(page.nextCursor))break;seen.add(page.nextCursor);cursor=page.nextCursor;}return total;}
+function FoldArrow({open,onClick,label}:{open:boolean;onClick:()=>void;label:string}){return <button type="button" className="secondary" onClick={onClick} aria-expanded={open} aria-label={`${open?'Collapse':'Expand'} ${label}`} title={`${open?'Collapse':'Expand'} ${label}`} style={{width:'34px',height:'34px',padding:0,display:'grid',placeItems:'center',flex:'0 0 auto'}}><svg width="17" height="17" viewBox="0 0 20 20" aria-hidden="true"><path d={open?'M5.5 12.5 10 8l4.5 4.5':'M5.5 7.5 10 12l4.5-4.5'} fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"/></svg></button>;}
 
 function Login({onLogin}:{onLogin:()=>Promise<void>}){const [username,setUsername]=useState('');const [password,setPassword]=useState('');const [error,setError]=useState('');const [busy,setBusy]=useState(false);async function submit(e:FormEvent){e.preventDefault();setBusy(true);setError('');try{const r=await fetch('/portal-api/auth/login',{method:'POST',headers:{'content-type':'application/json',accept:'application/json'},body:JSON.stringify({username,password}),credentials:'same-origin'});if(!r.ok){const b=await r.json().catch(()=>({} as ApiError)) as ApiError;throw new Error(b.error??'Login failed');}await onLogin();}catch(err){setError(err instanceof Error?err.message:'Login failed');}finally{setBusy(false);}}return <div className="login-shell"><form className="login-card" onSubmit={submit}><div className="brand login-brand"><div className="mark">N</div><div><strong>NETA</strong><span>Endpoint Assurance</span></div></div><h1>Sign in</h1><p>Cloudflare Access protects the perimeter. NETA authentication controls application permissions.</p><label>Username<input autoComplete="username" value={username} onChange={(e)=>setUsername(e.target.value)} required/></label><label>Password<input type="password" autoComplete="current-password" value={password} onChange={(e)=>setPassword(e.target.value)} required/></label>{error&&<div className="login-error">{error}</div>}<button type="submit" disabled={busy}>{busy?'Signing in…':'Sign in'}</button></form></div>;}
 
@@ -86,24 +97,41 @@ function Findings({session}:{session:Session}){
   const[params,setParams]=useSearchParams();
   const filters=findingFiltersFromSearch(params);
   const cursor=params.get('cursor')??'';
-  const[draft,setDraft]=useState<FindingFilters>(filters);
-  const[filtersOpen,setFiltersOpen]=useState(false);
+  const[draft,setDraft]=useState<FindingFilters>(()=>hasFindingSearchState(params)?findingFiltersFromSearch(params):(readStoredFindingFilters()??defaultFindingFilters));
+  const[filtersOpen,setFiltersOpen]=useState(()=>readStoredBool(FINDING_FILTERS_OPEN_STORAGE,false));
+  const[bulkOpen,setBulkOpen]=useState(()=>readStoredBool(FINDING_BULK_OPEN_STORAGE,false));
   const[reason,setReason]=useState('');
   const[result,setResult]=useState<OperationResult|null>(null);
-  useEffect(()=>{setDraft(findingFiltersFromSearch(params));},[params.toString()]);
+  useEffect(()=>{
+    if(hasFindingSearchState(params)){
+      const parsed=findingFiltersFromSearch(params);
+      setDraft(parsed);
+      writeStoredFindingFilters(parsed);
+      return;
+    }
+    const stored=readStoredFindingFilters();
+    if(stored){
+      setDraft(stored);
+      const restored=findingSearchFromFilters(stored);
+      if(restored.toString())setParams(restored,{replace:true});
+    }else setDraft(defaultFindingFilters);
+  },[params.toString()]);
   const system=useQuery({queryKey:['system'],queryFn:()=>api<SystemInfo>('/system')});
   const q=useQuery({queryKey:['findings',filters,cursor],queryFn:()=>api<PageData<Finding>>(`/findings?${findingQuery(filters,cursor)}`),refetchInterval:10000});
+  const matchCount=useQuery({queryKey:['findings-match-count',filters],queryFn:()=>loadFindingCount(filters),refetchInterval:30000,staleTime:10000});
   const summary=useQuery({queryKey:['findings-summary'],queryFn:loadFindingSummary,refetchInterval:10000});
   const preview=useMutation({mutationFn:()=>api<FindingBulkPreview>(`/findings/bulk-preview?${findingBulkQuery(filters)}`)});
-  const action=useMutation({mutationFn:({kind}:{kind:'resolve'|'purge'})=>post<OperationResult>(`/findings/bulk-${kind}`,{...filters,olderThanSeconds:filters.olderThanSeconds?Number(filters.olderThanSeconds):undefined,newerThanSeconds:filters.newerThanSeconds?Number(filters.newerThanSeconds):undefined,reason},session,operationKey(`findings-bulk-${kind}`)),onSuccess:async r=>{setResult(r);preview.reset();setFindingCursor('');await Promise.all([qc.invalidateQueries({queryKey:['findings']}),qc.invalidateQueries({queryKey:['findings-summary']}),qc.invalidateQueries({queryKey:['dashboard']})]);}});
+  const action=useMutation({mutationFn:({kind}:{kind:'resolve'|'purge'})=>post<OperationResult>(`/findings/bulk-${kind}`,{...filters,olderThanSeconds:filters.olderThanSeconds?Number(filters.olderThanSeconds):undefined,newerThanSeconds:filters.newerThanSeconds?Number(filters.newerThanSeconds):undefined,reason},session,operationKey(`findings-bulk-${kind}`)),onSuccess:async r=>{setResult(r);preview.reset();setFindingCursor('');await Promise.all([qc.invalidateQueries({queryKey:['findings']}),qc.invalidateQueries({queryKey:['findings-match-count']}),qc.invalidateQueries({queryKey:['findings-summary']}),qc.invalidateQueries({queryKey:['dashboard']})]);}});
   const writeReady=Boolean(system.data?.adminConfigured&&system.data.portalServiceAuthorizationConfigured);
   const canResolve=allowed(session,'OPERATOR')&&writeReady;
   const canPurge=allowed(session,'ADMIN')&&writeReady;
   const previewCount=preview.data?.count??0;
-  function apply(e:FormEvent){e.preventDefault();setParams(findingSearchFromFilters(draft));setFiltersOpen(false);preview.reset();setResult(null);}
-  function reset(){const initial:FindingFilters={agent:'',severity:'',rule:'',status:'ACTIVE',assessment:'',olderThanSeconds:'',newerThanSeconds:''};setDraft(initial);setParams(new URLSearchParams());setFiltersOpen(false);preview.reset();setResult(null);}
+  function apply(e:FormEvent){e.preventDefault();const next={...draft};writeStoredFindingFilters(next);setParams(findingSearchFromFilters(next));preview.reset();setResult(null);}
+  function reset(){setDraft(defaultFindingFilters);writeStoredFindingFilters(defaultFindingFilters);setParams(new URLSearchParams());preview.reset();setResult(null);}
   function setFindingCursor(nextCursor:string){const next=new URLSearchParams(params);if(nextCursor)next.set('cursor',nextCursor);else next.delete('cursor');setParams(next);}
   function updateAge(value:string){if(!value){setDraft({...draft,olderThanSeconds:'',newerThanSeconds:''});return;}const[kind,seconds]=value.split(':');setDraft({...draft,olderThanSeconds:kind==='older'?seconds:'',newerThanSeconds:kind==='newer'?seconds:''});}
+  function toggleFilters(){setFiltersOpen(value=>{const next=!value;writeStoredBool(FINDING_FILTERS_OPEN_STORAGE,next);return next;});}
+  function toggleBulk(){setBulkOpen(value=>{const next=!value;writeStoredBool(FINDING_BULK_OPEN_STORAGE,next);return next;});}
   function run(kind:'resolve'|'purge'){
     if(!reason.trim()||!preview.data)return;
     const label=kind==='purge'?'Permanently purge':'Resolve/archive';
@@ -111,7 +139,9 @@ function Findings({session}:{session:Session}){
     if(confirm(`${label} ${preview.data.count} matching finding(s)?${irreversible}`))action.mutate({kind});
   }
   const appliedSummary=[
+    matchCount.isLoading?'Matches: …':matchCount.isError?'Matches: unavailable':`Matches: ${matchCount.data??0}`,
     filters.agent?`Agent: ${filters.agent}`:'All agents',
+    filters.rule?`Rule/type: ${filters.rule}`:'Any rule/type',
     filters.severity?`Severity: ${filters.severity}`:'Any severity',
     filters.assessment?`Assessment: ${filters.assessment.replaceAll('_',' ')}`:'Any assessment',
     `Status: ${filters.status||'Any'}`,
@@ -124,7 +154,7 @@ function Findings({session}:{session:Session}){
     <div className="panel action-form">
       <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',gap:'16px',flexWrap:'wrap'}}>
         <div style={{minWidth:0,flex:'1 1 680px'}}><h3 style={{marginTop:0}}>Filter findings</h3><div className="toolbar" style={{marginTop:'8px'}}>{appliedSummary.map(item=><span key={item} className="badge muted">{item}</span>)}</div></div>
-        <button type="button" className="secondary" onClick={()=>setFiltersOpen(v=>!v)} aria-expanded={filtersOpen}>{filtersOpen?'▲ Hide filters':'▼ Edit filters'}</button>
+        <FoldArrow open={filtersOpen} onClick={toggleFilters} label="finding filters"/>
       </div>
       {filtersOpen&&<form onSubmit={apply} style={{marginTop:'18px'}}>
         <div className="form-grid">
@@ -139,18 +169,20 @@ function Findings({session}:{session:Session}){
       </form>}
     </div>
     <div className="panel action-form">
-      <h3>Bulk action</h3>
-      <p>Actions use the applied filters above. Preview first; no row-by-row selection is required.</p>
-      {!canResolve&&<OperationNotice system={system.data} session={session} required="OPERATOR"/>}
-      <label>Reason<input value={reason} onChange={e=>setReason(e.target.value)} placeholder="Why these findings are being resolved or purged" disabled={!canResolve}/></label>
-      <div className="toolbar">
-        <button type="button" className="secondary" disabled={!canResolve||preview.isPending} onClick={()=>preview.mutate()}>{preview.isPending?'Previewing…':'Preview matching findings'}</button>
-        <button type="button" disabled={!canResolve||!reason.trim()||!preview.data||previewCount===0||action.isPending} onClick={()=>run('resolve')}>Resolve / archive</button>
-        <button type="button" className="danger" disabled={!canPurge||!reason.trim()||!preview.data||previewCount===0||action.isPending} onClick={()=>run('purge')}>Permanently purge</button>
-      </div>
-      {preview.data&&<div className="notice"><strong>{preview.data.count} finding(s) match.</strong>{Object.keys(preview.data.byRule).length>0&&<span> Top rules: {Object.entries(preview.data.byRule).slice(0,5).map(([rule,count])=>`${rule} (${count})`).join(', ')}</span>}</div>}
-      {preview.error&&<div className="login-error">{(preview.error as Error).message}</div>}
-      {action.error&&<div className="login-error">{(action.error as Error).message}</div>}
+      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',gap:'16px'}}><h3 style={{margin:0}}>Bulk action</h3><FoldArrow open={bulkOpen} onClick={toggleBulk} label="bulk action"/></div>
+      {bulkOpen&&<div style={{marginTop:'18px'}}>
+        <p>Actions use the applied filters above. Preview first; no row-by-row selection is required.</p>
+        {!canResolve&&<OperationNotice system={system.data} session={session} required="OPERATOR"/>}
+        <label>Reason<input value={reason} onChange={e=>setReason(e.target.value)} placeholder="Why these findings are being resolved or purged" disabled={!canResolve}/></label>
+        <div className="toolbar">
+          <button type="button" className="secondary" disabled={!canResolve||preview.isPending} onClick={()=>preview.mutate()}>{preview.isPending?'Previewing…':'Preview matching findings'}</button>
+          <button type="button" disabled={!canResolve||!reason.trim()||!preview.data||previewCount===0||action.isPending} onClick={()=>run('resolve')}>Resolve / archive</button>
+          <button type="button" className="danger" disabled={!canPurge||!reason.trim()||!preview.data||previewCount===0||action.isPending} onClick={()=>run('purge')}>Permanently purge</button>
+        </div>
+        {preview.data&&<div className="notice"><strong>{preview.data.count} finding(s) match.</strong>{Object.keys(preview.data.byRule).length>0&&<span> Top rules: {Object.entries(preview.data.byRule).slice(0,5).map(([rule,count])=>`${rule} (${count})`).join(', ')}</span>}</div>}
+        {preview.error&&<div className="login-error">{(preview.error as Error).message}</div>}
+        {action.error&&<div className="login-error">{(action.error as Error).message}</div>}
+      </div>}
     </div>
     <OperationResultView result={result}/>
     <QueryState loading={q.isLoading} error={q.error as Error|null}><div className="panel table-panel"><div className="table-wrap"><table><thead><tr><th>Last seen</th><th>Agent</th><th>Subject</th><th>Type</th><th>Severity</th><th>Confidence</th><th>Assessment</th><th>Count</th><th>Status</th><th>Incident</th></tr></thead><tbody>{q.data?.items.map(f=><tr key={f.id}><td>{relativeAge(f.lastSeen)}</td><td>{f.agent}</td><td className="mono"><Link to={`/findings/${encodeURIComponent(f.id)}`} className="entity-link">{f.target}</Link></td><td className="mono">{f.type}</td><td><StatusBadge value={f.severity}/></td><td>{f.confidence}</td><td><StatusBadge value={f.assessment}/></td><td>{f.count}</td><td><StatusBadge value={f.status}/></td><td className="mono">{f.incident}</td></tr>)}</tbody></table></div></div><Pager nextCursor={q.data?.nextCursor??null} hasPrevious={Boolean(cursor)} onReset={()=>setFindingCursor('')} onNext={()=>q.data?.nextCursor&&setFindingCursor(q.data.nextCursor)}/></QueryState>
