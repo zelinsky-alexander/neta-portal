@@ -1,4 +1,4 @@
-import { useState, type FormEvent, type ReactNode } from 'react';
+import { useEffect, useState, type FormEvent, type ReactNode } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, NavLink, Route, Routes, useParams, useSearchParams } from 'react-router-dom';
 import FindingDetail from './FindingDetail';
@@ -12,7 +12,7 @@ type Agent = { id:string; name:string; state:string; version:string; build:strin
 type Finding = { id:string; lastSeen:string; agent:string; target:string; type:string; severity:string; confidence:string; assessment:string; count:number; status:string; incident:string };
 type FindingSummary = { active:number; oldestActive:string|null; critical:number; high:number; medium:number; low:number; info:number };
 type FindingBulkPreview = { count:number; bySeverity:Record<string,number>; byRule:Record<string,number>; byAgent:Record<string,number> };
-type FindingFilters = { agent:string; severity:string; rule:string; status:string; olderThanSeconds:string };
+type FindingFilters = { agent:string; severity:string; rule:string; status:string; assessment:string; olderThanSeconds:string; newerThanSeconds:string };
 type Upgrade = { id:string; agent:string; from:string; target:string; status:string; platform:string; source:string; requested:string };
 type Certificate = { agentId:string; agent:string; agentStatus?:string; state:string; remaining:string; notAfter:string; fingerprint:string };
 type PageData<T> = { items:T[]; nextCursor:string|null; compatibilityMode?:boolean };
@@ -68,8 +68,12 @@ function Detail({label,value,mono,wide}:{label:string;value:ReactNode;mono?:bool
 function Pager({nextCursor,onNext,onReset,hasPrevious}:{nextCursor:string|null;onNext:()=>void;onReset:()=>void;hasPrevious:boolean}){return <div className="toolbar">{hasPrevious&&<button type="button" className="secondary" onClick={onReset}>First page</button>}{nextCursor&&<button type="button" className="secondary" onClick={onNext}>Next page</button>}</div>;}
 function OperationResultView({result}:{result:OperationResult|null}){if(!result)return null;return <div className="panel operation-result"><div className="operation-result-title"><StatusBadge value="ACCEPTED"/><strong>{result.operation}</strong></div>{result.affected!=null&&<div><strong>Affected:</strong> {result.affected}</div>}{result.message&&<div>{result.message}</div>}<div className="mono">Request: {result.requestId}</div><div className="mono">Idempotency key: {result.idempotencyKey}</div>{result.coordinatorResponse&&<pre>{result.coordinatorResponse}</pre>}{result.certificateChainPem&&<textarea className="pem-output" value={result.certificateChainPem} readOnly aria-label="Issued certificate chain"/>}</div>;}
 function OperationNotice({system,session,required}:{system?:SystemInfo;session:Session;required:Role}){if(!allowed(session,required))return <div className="notice danger-notice">Your {session.role} role does not permit this operation. Required role: {required}.</div>;if(!system?.adminConfigured||!system.portalServiceAuthorizationConfigured)return <div className="notice danger-notice">Coordinator write authorization is not fully configured.</div>;return <div className="notice">The portal and coordinator both enforce your role. Mutations retain actor, service and request context in coordinator audit.</div>;}
-function findingQuery(filters:FindingFilters,cursor=''){const params=new URLSearchParams({limit:'50'});if(filters.agent)params.set('agent',filters.agent);if(filters.severity)params.set('severity',filters.severity);if(filters.rule)params.set('rule',filters.rule);if(filters.status)params.set('status',filters.status);if(filters.olderThanSeconds)params.set('olderThanSeconds',filters.olderThanSeconds);if(cursor)params.set('cursor',cursor);return params.toString();}
-function findingBulkQuery(filters:FindingFilters){const params=new URLSearchParams();if(filters.agent)params.set('agent',filters.agent);if(filters.severity)params.set('severity',filters.severity);if(filters.rule)params.set('rule',filters.rule);if(filters.status)params.set('status',filters.status);if(filters.olderThanSeconds)params.set('olderThanSeconds',filters.olderThanSeconds);return params.toString();}
+function findingQuery(filters:FindingFilters,cursor=''){const params=new URLSearchParams({limit:'50'});if(filters.agent)params.set('agent',filters.agent);if(filters.severity)params.set('severity',filters.severity);if(filters.rule)params.set('rule',filters.rule);if(filters.status)params.set('status',filters.status);if(filters.assessment)params.set('assessment',filters.assessment);if(filters.olderThanSeconds)params.set('olderThanSeconds',filters.olderThanSeconds);if(filters.newerThanSeconds)params.set('newerThanSeconds',filters.newerThanSeconds);if(cursor)params.set('cursor',cursor);return params.toString();}
+function findingBulkQuery(filters:FindingFilters){const params=new URLSearchParams();if(filters.agent)params.set('agent',filters.agent);if(filters.severity)params.set('severity',filters.severity);if(filters.rule)params.set('rule',filters.rule);if(filters.status)params.set('status',filters.status);if(filters.assessment)params.set('assessment',filters.assessment);if(filters.olderThanSeconds)params.set('olderThanSeconds',filters.olderThanSeconds);if(filters.newerThanSeconds)params.set('newerThanSeconds',filters.newerThanSeconds);return params.toString();}
+function findingFiltersFromSearch(params:URLSearchParams):FindingFilters{const rawStatus=params.get('status');return{agent:params.get('agent')??'',severity:params.get('severity')??'',rule:params.get('rule')??'',status:rawStatus==='ALL'?'':(rawStatus??'ACTIVE'),assessment:params.get('assessment')??'',olderThanSeconds:params.get('olderThanSeconds')??'',newerThanSeconds:params.get('newerThanSeconds')??''};}
+function findingSearchFromFilters(filters:FindingFilters){const params=new URLSearchParams();if(filters.agent)params.set('agent',filters.agent);if(filters.severity)params.set('severity',filters.severity);if(filters.rule)params.set('rule',filters.rule);if(filters.status==='')params.set('status','ALL');else if(filters.status!=='ACTIVE')params.set('status',filters.status);if(filters.assessment)params.set('assessment',filters.assessment);if(filters.olderThanSeconds)params.set('olderThanSeconds',filters.olderThanSeconds);if(filters.newerThanSeconds)params.set('newerThanSeconds',filters.newerThanSeconds);return params;}
+function findingAgeValue(filters:FindingFilters){if(filters.newerThanSeconds)return `newer:${filters.newerThanSeconds}`;if(filters.olderThanSeconds)return `older:${filters.olderThanSeconds}`;return '';}
+function findingAgeLabel(filters:FindingFilters){const seconds=Number(filters.newerThanSeconds||filters.olderThanSeconds);if(!seconds)return 'Any time';const labels:Record<number,string>={3600:'1 hour',86400:'24 hours',604800:'7 days',2592000:'30 days'};const duration=labels[seconds]??`${seconds}s`;return filters.newerThanSeconds?`Within ${duration}`:`Older than ${duration}`;}
 
 function Login({onLogin}:{onLogin:()=>Promise<void>}){const [username,setUsername]=useState('');const [password,setPassword]=useState('');const [error,setError]=useState('');const [busy,setBusy]=useState(false);async function submit(e:FormEvent){e.preventDefault();setBusy(true);setError('');try{const r=await fetch('/portal-api/auth/login',{method:'POST',headers:{'content-type':'application/json',accept:'application/json'},body:JSON.stringify({username,password}),credentials:'same-origin'});if(!r.ok){const b=await r.json().catch(()=>({} as ApiError)) as ApiError;throw new Error(b.error??'Login failed');}await onLogin();}catch(err){setError(err instanceof Error?err.message:'Login failed');}finally{setBusy(false);}}return <div className="login-shell"><form className="login-card" onSubmit={submit}><div className="brand login-brand"><div className="mark">N</div><div><strong>NETA</strong><span>Endpoint Assurance</span></div></div><h1>Sign in</h1><p>Cloudflare Access protects the perimeter. NETA authentication controls application permissions.</p><label>Username<input autoComplete="username" value={username} onChange={(e)=>setUsername(e.target.value)} required/></label><label>Password<input type="password" autoComplete="current-password" value={password} onChange={(e)=>setPassword(e.target.value)} required/></label>{error&&<div className="login-error">{error}</div>}<button type="submit" disabled={busy}>{busy?'Signing in…':'Sign in'}</button></form></div>;}
 
@@ -79,43 +83,61 @@ function Agents(){const [params,setParams]=useSearchParams();const search=params
 function AgentDetail(){const{agent=''}=useParams();const q=useQuery({queryKey:['agent',agent],queryFn:()=>api<{details:Record<string,string>}>(`/agents/${encodeURIComponent(agent)}`),refetchInterval:5000});const d=q.data?.details??{};return <Page title={d.agent??'Agent'} subtitle={agent}><QueryState loading={q.isLoading} error={q.error as Error|null}><div className="panel details-grid"><Detail label="Enrollment state" value={<StatusBadge value={d.enrollment_state??'UNKNOWN'}/>}/><Detail label="Platform" value={<Platform value={d.platform??'-'} name={d.agent??''}/>}/><Detail label="Version" value={d.version??'-'}/><Detail label="Build ID" value={d.build_id??'-'} mono/><Detail label="Last seen" value={d.last_seen??'-'}/><Detail label="Protocol version" value={d.protocol_version??'-'}/><Detail label="Schema version" value={d.schema_version??'-'}/><Detail label="Certificate SHA-256" value={d.certificate_sha_256??'-'} mono/><Detail label="Features" value={d.features??'-'} wide/></div></QueryState></Page>;}
 function Findings({session}:{session:Session}){
   const qc=useQueryClient();
-  const initial:FindingFilters={agent:'',severity:'',rule:'',status:'ACTIVE',olderThanSeconds:''};
-  const[cursor,setCursor]=useState('');
-  const[draft,setDraft]=useState<FindingFilters>(initial);
-  const[filters,setFilters]=useState<FindingFilters>(initial);
+  const[params,setParams]=useSearchParams();
+  const filters=findingFiltersFromSearch(params);
+  const cursor=params.get('cursor')??'';
+  const[draft,setDraft]=useState<FindingFilters>(filters);
+  const[filtersOpen,setFiltersOpen]=useState(false);
   const[reason,setReason]=useState('');
   const[result,setResult]=useState<OperationResult|null>(null);
+  useEffect(()=>{setDraft(findingFiltersFromSearch(params));},[params.toString()]);
   const system=useQuery({queryKey:['system'],queryFn:()=>api<SystemInfo>('/system')});
   const q=useQuery({queryKey:['findings',filters,cursor],queryFn:()=>api<PageData<Finding>>(`/findings?${findingQuery(filters,cursor)}`),refetchInterval:10000});
   const summary=useQuery({queryKey:['findings-summary'],queryFn:loadFindingSummary,refetchInterval:10000});
   const preview=useMutation({mutationFn:()=>api<FindingBulkPreview>(`/findings/bulk-preview?${findingBulkQuery(filters)}`)});
-  const action=useMutation({mutationFn:({kind}:{kind:'resolve'|'purge'})=>post<OperationResult>(`/findings/bulk-${kind}`,{...filters,olderThanSeconds:filters.olderThanSeconds?Number(filters.olderThanSeconds):undefined,reason},session,operationKey(`findings-bulk-${kind}`)),onSuccess:async r=>{setResult(r);preview.reset();setCursor('');await Promise.all([qc.invalidateQueries({queryKey:['findings']}),qc.invalidateQueries({queryKey:['findings-summary']}),qc.invalidateQueries({queryKey:['dashboard']})]);}});
+  const action=useMutation({mutationFn:({kind}:{kind:'resolve'|'purge'})=>post<OperationResult>(`/findings/bulk-${kind}`,{...filters,olderThanSeconds:filters.olderThanSeconds?Number(filters.olderThanSeconds):undefined,newerThanSeconds:filters.newerThanSeconds?Number(filters.newerThanSeconds):undefined,reason},session,operationKey(`findings-bulk-${kind}`)),onSuccess:async r=>{setResult(r);preview.reset();setFindingCursor('');await Promise.all([qc.invalidateQueries({queryKey:['findings']}),qc.invalidateQueries({queryKey:['findings-summary']}),qc.invalidateQueries({queryKey:['dashboard']})]);}});
   const writeReady=Boolean(system.data?.adminConfigured&&system.data.portalServiceAuthorizationConfigured);
   const canResolve=allowed(session,'OPERATOR')&&writeReady;
   const canPurge=allowed(session,'ADMIN')&&writeReady;
   const previewCount=preview.data?.count??0;
-  function apply(e:FormEvent){e.preventDefault();setFilters({...draft});setCursor('');preview.reset();setResult(null);}
-  function reset(){setDraft(initial);setFilters(initial);setCursor('');preview.reset();setResult(null);}
+  function apply(e:FormEvent){e.preventDefault();setParams(findingSearchFromFilters(draft));setFiltersOpen(false);preview.reset();setResult(null);}
+  function reset(){const initial:FindingFilters={agent:'',severity:'',rule:'',status:'ACTIVE',assessment:'',olderThanSeconds:'',newerThanSeconds:''};setDraft(initial);setParams(new URLSearchParams());setFiltersOpen(false);preview.reset();setResult(null);}
+  function setFindingCursor(nextCursor:string){const next=new URLSearchParams(params);if(nextCursor)next.set('cursor',nextCursor);else next.delete('cursor');setParams(next);}
+  function updateAge(value:string){if(!value){setDraft({...draft,olderThanSeconds:'',newerThanSeconds:''});return;}const[kind,seconds]=value.split(':');setDraft({...draft,olderThanSeconds:kind==='older'?seconds:'',newerThanSeconds:kind==='newer'?seconds:''});}
   function run(kind:'resolve'|'purge'){
     if(!reason.trim()||!preview.data)return;
     const label=kind==='purge'?'Permanently purge':'Resolve/archive';
     const irreversible=kind==='purge'?' This cannot be undone.':'';
     if(confirm(`${label} ${preview.data.count} matching finding(s)?${irreversible}`))action.mutate({kind});
   }
+  const appliedSummary=[
+    filters.agent?`Agent: ${filters.agent}`:'All agents',
+    filters.severity?`Severity: ${filters.severity}`:'Any severity',
+    filters.assessment?`Assessment: ${filters.assessment.replaceAll('_',' ')}`:'Any assessment',
+    `Status: ${filters.status||'Any'}`,
+    `Last seen: ${findingAgeLabel(filters)}`,
+    'Order: newest first'
+  ];
   return <Page title="Findings" subtitle="Coordinator-correlated security findings">
     {summary.data&&<div className="findings-summary-wrap"><div className="panel findings-summary"><div><strong>Active findings:</strong> {summary.data.active}</div><div><strong>Oldest active:</strong> {summary.data.oldestActive?relativeAge(summary.data.oldestActive):'-'}</div><div className="findings-severity-line"><strong>Severities:</strong><span className="severity-count severity-critical">{summary.data.critical} critical</span><span className="severity-separator">·</span><span className="severity-count severity-high">{summary.data.high} high</span><span className="severity-separator">·</span><span className="severity-count severity-medium">{summary.data.medium} medium</span><span className="severity-separator">·</span><span className="severity-count severity-low">{summary.data.low} low</span><span className="severity-separator">·</span><span className="severity-count severity-info">{summary.data.info} info</span></div></div></div>}
     {summary.isError&&<div className="notice findings-summary-error">Finding summary is temporarily unavailable.</div>}
-    <form className="panel action-form" onSubmit={apply}>
-      <h3>Filter findings</h3>
-      <div className="form-grid">
-        <label>Agent<input value={draft.agent} onChange={e=>setDraft({...draft,agent:e.target.value})} placeholder="All agents"/></label>
-        <label>Severity<select value={draft.severity} onChange={e=>setDraft({...draft,severity:e.target.value})}><option value="">Any severity</option><option value="CRITICAL">Critical</option><option value="HIGH">High</option><option value="MEDIUM">Medium</option><option value="LOW">Low</option><option value="INFO">Info</option></select></label>
-        <label>Rule / type<input value={draft.rule} onChange={e=>setDraft({...draft,rule:e.target.value})} placeholder="e.g. NET-002"/></label>
-        <label>Status<select value={draft.status} onChange={e=>setDraft({...draft,status:e.target.value})}><option value="ACTIVE">Active</option><option value="RESOLVED">Resolved</option><option value="">Any status</option></select></label>
-        <label>Last seen<select value={draft.olderThanSeconds} onChange={e=>setDraft({...draft,olderThanSeconds:e.target.value})}><option value="">Any age</option><option value="3600">Older than 1 hour</option><option value="86400">Older than 1 day</option><option value="604800">Older than 7 days</option><option value="2592000">Older than 30 days</option></select></label>
+    <div className="panel action-form">
+      <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',gap:'16px',flexWrap:'wrap'}}>
+        <div style={{minWidth:0,flex:'1 1 680px'}}><h3 style={{marginTop:0}}>Filter findings</h3><div className="toolbar" style={{marginTop:'8px'}}>{appliedSummary.map(item=><span key={item} className="badge muted">{item}</span>)}</div></div>
+        <button type="button" className="secondary" onClick={()=>setFiltersOpen(v=>!v)} aria-expanded={filtersOpen}>{filtersOpen?'▲ Hide filters':'▼ Edit filters'}</button>
       </div>
-      <div className="toolbar"><button type="submit">Apply filters</button><button type="button" className="secondary" onClick={reset}>Reset</button></div>
-    </form>
+      {filtersOpen&&<form onSubmit={apply} style={{marginTop:'18px'}}>
+        <div className="form-grid">
+          <label>Agent<input value={draft.agent} onChange={e=>setDraft({...draft,agent:e.target.value})} placeholder="All agents"/></label>
+          <label>Severity<select value={draft.severity} onChange={e=>setDraft({...draft,severity:e.target.value})}><option value="">Any severity</option><option value="CRITICAL">Critical</option><option value="HIGH">High</option><option value="MEDIUM">Medium</option><option value="LOW">Low</option><option value="INFO">Info</option></select></label>
+          <label>Rule / type<input value={draft.rule} onChange={e=>setDraft({...draft,rule:e.target.value})} placeholder="e.g. NET-002"/></label>
+          <label>Assessment<select value={draft.assessment} onChange={e=>setDraft({...draft,assessment:e.target.value})}><option value="">Any assessment</option><option value="PEER_SUSPICIOUS">Peer suspicious</option><option value="PEER_CHANGED">Peer changed</option><option value="PEER_UNVERIFIED">Peer unverified</option><option value="PEER_TRUSTED">Peer trusted</option><option value="PEER_UNKNOWN">Peer unknown</option><option value="BEHAVIORAL_PATTERN">Behavioral pattern</option><option value="INTENT_MALICIOUS">Intent malicious</option><option value="INTENT_SUSPICIOUS">Intent suspicious</option><option value="INTENT_BENIGN">Intent benign</option><option value="INTENT_UNKNOWN">Intent unknown</option></select></label>
+          <label>Status<select value={draft.status} onChange={e=>setDraft({...draft,status:e.target.value})}><option value="ACTIVE">Active</option><option value="RESOLVED">Resolved</option><option value="">Any status</option></select></label>
+          <label>Last seen<select value={findingAgeValue(draft)} onChange={e=>updateAge(e.target.value)}><option value="">Any time</option><option value="newer:3600">Within last 1 hour</option><option value="newer:86400">Within last 24 hours</option><option value="newer:604800">Within last 7 days</option><option value="newer:2592000">Within last 30 days</option><option value="older:86400">Older than 24 hours</option><option value="older:604800">Older than 7 days</option><option value="older:2592000">Older than 30 days</option></select></label>
+        </div>
+        <div className="toolbar"><button type="submit">Apply filters</button><button type="button" className="secondary" onClick={reset}>Reset</button></div>
+      </form>}
+    </div>
     <div className="panel action-form">
       <h3>Bulk action</h3>
       <p>Actions use the applied filters above. Preview first; no row-by-row selection is required.</p>
@@ -131,7 +153,7 @@ function Findings({session}:{session:Session}){
       {action.error&&<div className="login-error">{(action.error as Error).message}</div>}
     </div>
     <OperationResultView result={result}/>
-    <QueryState loading={q.isLoading} error={q.error as Error|null}><div className="panel table-panel"><div className="table-wrap"><table><thead><tr><th>Last seen</th><th>Agent</th><th>Subject</th><th>Type</th><th>Severity</th><th>Confidence</th><th>Assessment</th><th>Count</th><th>Status</th><th>Incident</th></tr></thead><tbody>{q.data?.items.map(f=><tr key={f.id}><td>{relativeAge(f.lastSeen)}</td><td>{f.agent}</td><td className="mono"><Link to={`/findings/${encodeURIComponent(f.id)}`} className="entity-link">{f.target}</Link></td><td className="mono">{f.type}</td><td><StatusBadge value={f.severity}/></td><td>{f.confidence}</td><td><StatusBadge value={f.assessment}/></td><td>{f.count}</td><td><StatusBadge value={f.status}/></td><td className="mono">{f.incident}</td></tr>)}</tbody></table></div></div><Pager nextCursor={q.data?.nextCursor??null} hasPrevious={Boolean(cursor)} onReset={()=>setCursor('')} onNext={()=>q.data?.nextCursor&&setCursor(q.data.nextCursor)}/></QueryState>
+    <QueryState loading={q.isLoading} error={q.error as Error|null}><div className="panel table-panel"><div className="table-wrap"><table><thead><tr><th>Last seen</th><th>Agent</th><th>Subject</th><th>Type</th><th>Severity</th><th>Confidence</th><th>Assessment</th><th>Count</th><th>Status</th><th>Incident</th></tr></thead><tbody>{q.data?.items.map(f=><tr key={f.id}><td>{relativeAge(f.lastSeen)}</td><td>{f.agent}</td><td className="mono"><Link to={`/findings/${encodeURIComponent(f.id)}`} className="entity-link">{f.target}</Link></td><td className="mono">{f.type}</td><td><StatusBadge value={f.severity}/></td><td>{f.confidence}</td><td><StatusBadge value={f.assessment}/></td><td>{f.count}</td><td><StatusBadge value={f.status}/></td><td className="mono">{f.incident}</td></tr>)}</tbody></table></div></div><Pager nextCursor={q.data?.nextCursor??null} hasPrevious={Boolean(cursor)} onReset={()=>setFindingCursor('')} onNext={()=>q.data?.nextCursor&&setFindingCursor(q.data.nextCursor)}/></QueryState>
   </Page>;
 }
 
