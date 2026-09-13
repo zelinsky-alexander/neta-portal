@@ -1,3 +1,4 @@
+// Read-only central rule details opened from finding rule identifiers.
 import { useQuery } from '@tanstack/react-query';
 import { Link, useParams } from 'react-router-dom';
 
