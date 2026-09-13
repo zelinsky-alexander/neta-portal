@@ -96,7 +96,7 @@ function paramsFrom(query: Record<string, string | undefined>, keys: string[], d
 }
 function findingFilterParams(values: Record<string, string | undefined>): URLSearchParams {
   const params = new URLSearchParams();
-  for (const key of ['agent','severity','rule','status','olderThanSeconds']) if (values[key]) params.set(key, values[key]!);
+  for (const key of ['agent','severity','rule','status','assessment','olderThanSeconds','newerThanSeconds']) if (values[key]) params.set(key, values[key]!);
   return params;
 }
 function validation<T>(fn: () => T): T {
@@ -177,7 +177,7 @@ app.get('/portal-api/agents/:agent', async (request) => {
 app.get('/portal-api/findings', async (request) => {
   const actor=currentSession(request); const query=request.query as Record<string,string|undefined>;
   if(config.legacyOperatorApi){const params=paramsFrom(query,['agent','trust','performance','status','target'],50);params.set('offset','0');return {...parseFindingSearch(await coordinator.request(`/api/v1/operator/finding-search?${params}`)),nextCursor:null,compatibilityMode:true};}
-  const params=paramsFrom(query,['cursor','agent','trust','performance','status','target','severity','rule','olderThanSeconds']); const page=await coordinator.requestJson<Page<FindingJson>>(`/api/v1/findings?${params}`,{actor});
+  const params=paramsFrom(query,['cursor','agent','trust','performance','status','target','severity','rule','assessment','olderThanSeconds','newerThanSeconds']); const page=await coordinator.requestJson<Page<FindingJson>>(`/api/v1/findings?${params}`,{actor});
   return {items:page.items.map((f)=>({id:f.id,lastSeen:f.lastSeen??'-',agent:f.agentName,target:f.subject??networkSubject(f.host,f.port),type:f.type??'-',severity:f.severity??'-',confidence:f.confidence??'-',assessment:f.assessment??'-',count:f.count,status:f.status??'-',incident:f.incidentId??'-'})),nextCursor:page.nextCursor,compatibilityMode:false};
 });
 
@@ -195,7 +195,7 @@ app.post('/portal-api/findings/bulk-resolve', async (request, reply) => {
   const body=validation(()=>validateFindingBulk(request.body));
   const ids=operationHeaders(request as unknown as {headers:Record<string,unknown>});
   const params=new URLSearchParams({reason:body.reason});
-  if(body.agent)params.set('agent',body.agent); if(body.severity)params.set('severity',body.severity); if(body.rule)params.set('rule',body.rule); if(body.status)params.set('status',body.status); if(body.olderThanSeconds)params.set('olderThanSeconds',String(body.olderThanSeconds));
+  if(body.agent)params.set('agent',body.agent); if(body.severity)params.set('severity',body.severity); if(body.rule)params.set('rule',body.rule); if(body.status)params.set('status',body.status); if(body.assessment)params.set('assessment',body.assessment); if(body.olderThanSeconds)params.set('olderThanSeconds',String(body.olderThanSeconds)); if(body.newerThanSeconds)params.set('newerThanSeconds',String(body.newerThanSeconds));
   const result=await coordinator.requestJson<FindingBulkResult>('/api/v1/operator/finding-bulk-resolve',{method:'POST',body:params,admin:true,actor,...ids});
   reply.header('x-request-id',ids.requestId);
   return {accepted:true,operation:'FINDINGS_BULK_RESOLVED',requestId:ids.requestId,idempotencyKey:ids.idempotencyKey,idempotencyEnforcedByCoordinator:false,affected:result.affected,message:result.message};
@@ -207,7 +207,7 @@ app.post('/portal-api/findings/bulk-purge', async (request, reply) => {
   const body=validation(()=>validateFindingBulk(request.body));
   const ids=operationHeaders(request as unknown as {headers:Record<string,unknown>});
   const params=new URLSearchParams({reason:body.reason});
-  if(body.agent)params.set('agent',body.agent); if(body.severity)params.set('severity',body.severity); if(body.rule)params.set('rule',body.rule); if(body.status)params.set('status',body.status); if(body.olderThanSeconds)params.set('olderThanSeconds',String(body.olderThanSeconds));
+  if(body.agent)params.set('agent',body.agent); if(body.severity)params.set('severity',body.severity); if(body.rule)params.set('rule',body.rule); if(body.status)params.set('status',body.status); if(body.assessment)params.set('assessment',body.assessment); if(body.olderThanSeconds)params.set('olderThanSeconds',String(body.olderThanSeconds)); if(body.newerThanSeconds)params.set('newerThanSeconds',String(body.newerThanSeconds));
   const result=await coordinator.requestJson<FindingBulkResult>('/api/v1/operator/finding-bulk-purge',{method:'POST',body:params,admin:true,actor,...ids});
   reply.header('x-request-id',ids.requestId);
   return {accepted:true,operation:'FINDINGS_BULK_PURGED',requestId:ids.requestId,idempotencyKey:ids.idempotencyKey,idempotencyEnforcedByCoordinator:false,affected:result.affected,message:result.message};
