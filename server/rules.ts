@@ -65,6 +65,19 @@ export async function registerRuleRoutes(app:FastifyInstance,deps:Dependencies){
     return coordinator.requestJson<unknown>('/api/v1/operator/rules/fleet-state',{admin:true,actor});
   });
 
+  app.get('/portal-api/rules/base/:revision',async request=>{
+    const actor=requireSession(request); requireOperator(actor);
+    const {revision}=request.params as {revision:string};
+    return coordinator.requestJson<unknown>(`/api/v1/operator/rule-sets/${encodeURIComponent(revision)}/bundle`,{admin:true,actor});
+  });
+
+  app.get('/portal-api/rules/effective/:agent/:state',async request=>{
+    const actor=requireSession(request); requireOperator(actor);
+    const {agent,state}=request.params as {agent:string;state:string};
+    if(state!=='desired'&&state!=='active') throw Object.assign(new Error('state must be desired or active'),{statusCode:400});
+    return coordinator.requestJson<unknown>(`/api/v1/operator/rules/effective/${encodeURIComponent(agent)}/${state}`,{admin:true,actor});
+  });
+
   app.post('/portal-api/rules/refresh/:agent',async (request,reply)=>{
     const actor=requireSession(request); requireOperator(actor);
     const {agent}=request.params as {agent:string};
