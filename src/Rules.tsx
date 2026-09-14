@@ -16,6 +16,7 @@ type ApiError={error?:string};
 type Editor={id:string;engineRuleId:string;name:string;severity:string;enabled:boolean;parameters:string;exclude:string};
 type SectionKey='defaultRules'|'summary'|'convergence'|'yara'|'learning'|'customRules'|'publish';
 type SectionState=Record<SectionKey,boolean>;
+type BundleInspection={kind:string;agentId:string|null;endpointName:string|null;revision:number;version:string;sha256:string;bundle:unknown;appliedOverrideIds:number[];capturedAt:string|null};
 
 const SECTION_STORAGE_KEY='neta.rules.sections.v1';
 const defaultSections:SectionState={defaultRules:true,summary:false,convergence:false,yara:false,learning:false,customRules:false,publish:false};
@@ -49,8 +50,22 @@ function emptyEditor():Editor{return{id:'',engineRuleId:'BEH-001',name:'',severi
 function parseObject(text:string,label:string):Record<string,unknown>{
   try{const parsed=JSON.parse(text) as unknown;if(!parsed||typeof parsed!=='object'||Array.isArray(parsed))throw new Error();return parsed as Record<string,unknown>;}catch{throw new Error(`${label} must be a valid JSON object.`);}
 }
-function hashLabel(revision:number|null,sha:string|null){return revision==null&& !sha?'-':`r${revision??'-'} ${sha?sha.slice(0,16)+'…':'-'}`;}
 function timeLabel(value:string|null){if(!value)return '-';const d=new Date(value);return Number.isFinite(d.getTime())?d.toLocaleString():value;}
+function escapeHtml(value:string){return value.replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]??c));}
+function openBundleViewer(path:string,title:string){
+  const page=window.open('about:blank','_blank');
+  if(!page)return;
+  page.document.title=title;
+  page.document.write(`<html><head><title>${escapeHtml(title)}</title><meta name="viewport" content="width=device-width,initial-scale=1"><style>body{font-family:system-ui,sans-serif;background:#07111f;color:#dce8f7;margin:0;padding:28px}h1{font-size:24px;margin:0 0 8px}p{color:#91a5bf}.meta{background:#0e1b2d;border:1px solid #263b55;border-radius:12px;padding:14px 16px;margin:18px 0}.mono,pre{font-family:ui-monospace,SFMono-Regular,Consolas,monospace}pre{background:#0b1626;border:1px solid #263b55;border-radius:12px;padding:18px;white-space:pre-wrap;word-break:break-word;overflow:auto}a{color:#66aaff}</style></head><body><h1>${escapeHtml(title)}</h1><p>Loading exact rule bundle JSON…</p></body></html>`);
+  page.document.close();
+  void getJson<BundleInspection>(path).then(bundle=>{
+    const endpoint=bundle.endpointName?`<div>Endpoint: <strong>${escapeHtml(bundle.endpointName)}</strong> <span class="mono">${escapeHtml(bundle.agentId??'')}</span></div>`:'';
+    const overrides=bundle.appliedOverrideIds?.length?bundle.appliedOverrideIds.map(id=>`#${id}`).join(', '):'None';
+    page.document.body.innerHTML=`<h1>${escapeHtml(title)}</h1><p>${escapeHtml(bundle.kind)} · ${escapeHtml(bundle.version)} · revision r${bundle.revision}</p><div class="meta">${endpoint}<div>SHA-256: <span class="mono">${escapeHtml(bundle.sha256)}</span></div>${bundle.agentId?`<div>Applied endpoint overrides: ${escapeHtml(overrides)}</div>`:''}</div><pre>${escapeHtml(JSON.stringify(bundle.bundle,null,2))}</pre>`;
+  }).catch(error=>{
+    page.document.body.innerHTML=`<h1>${escapeHtml(title)}</h1><div class="meta">Unable to load exact bundle: ${escapeHtml(error instanceof Error?error.message:String(error))}</div>`;
+  });
+}
 function loadSections():SectionState{
   if(typeof window==='undefined')return defaultSections;
   try{
@@ -102,6 +117,16 @@ export default function Rules({session}:{session:Session}){
   function edit(rule:Rule){setMode('edit');setEditingId(rule.id);setEditor({id:rule.id,engineRuleId:rule.engineRuleId,name:rule.name,severity:rule.severity,enabled:rule.enabled,parameters:pretty(rule.parameters),exclude:pretty(rule.exclude??{})});setNotice('Changes create a new immutable rule revision. Endpoints are unchanged until Publish is pressed.');openSection(rule.origin==='DEFAULT'?'defaultRules':'customRules');}
   function create(){const initial=availableEngines[0]??'BEH-001';const base=byId.get(initial);setMode('create');setEditingId('');setEditor({...emptyEditor(),engineRuleId:initial,parameters:base?pretty(base.parameters):'{}',exclude:'{}'});setNotice('');openSection('customRules');}
   function ruleIdControl(rule:Rule){const label=displayRuleId(rule.id);if(!writable)return <span className="mono rule-id-text" title={label}>{label}</span>;return <button type="button" className="rule-id-link mono" title={`Edit ${label}`} onClick={()=>edit(rule)}>{label}</button>;}
+  function bundleCell(s:RuleFleetState,state:'desired'|'active'){
+    const revision=state==='desired'?s.desiredRevision:s.activeRevision;
+    const sha=state==='desired'?s.desiredSha256:s.activeSha256;
+    if(revision==null||!sha)return <span>-</span>;
+    const stateLabel=state==='desired'?'desired':'active';
+    return <span className="mono" style={{whiteSpace:'nowrap'}}>
+      <button type="button" className="rule-id-link mono" title={`View base r${revision} bundle`} onClick={()=>openBundleViewer(`/rules/base/${revision}`,`Base rule bundle r${revision} — ${s.endpointName} (${stateLabel})`)}>r{revision}</button>{' '}
+      <button type="button" className="rule-id-link mono" title={`View ${stateLabel} endpoint effective bundle`} onClick={()=>openBundleViewer(`/rules/effective/${encodeURIComponent(s.agentId)}/${state}`,`${state==='desired'?'Desired':'Active'} endpoint effective bundle — ${s.endpointName}`)}>{sha.slice(0,16)}…</button>
+    </span>;
+  }
 
   const save=useMutation({mutationFn:async()=>{const parameters=parseObject(editor.parameters,'Parameters');const exclude=parseObject(editor.exclude,'Exclusions');if(mode==='create')return mutate<Rule>('POST','/rules/custom',{id:editor.id||undefined,engineRuleId:editor.engineRuleId,name:editor.name,severity:editor.severity,enabled:editor.enabled,parameters,exclude},session);return mutate<Rule>('PUT',`/rules/${encodeURIComponent(editingId)}`,{name:editor.name,severity:editor.severity,enabled:editor.enabled,parameters,exclude},session);},onSuccess:async r=>{setNotice(`${r.id} revision ${r.revision} saved in the central catalog. Publish to make it the fleet target.`);await qc.invalidateQueries({queryKey:['rules']});}});
   const publish=useMutation({mutationFn:()=>mutate<any>('POST','/rule-sets/publish',{},session),onSuccess:async r=>{setNotice(`Published ${r.version} revision ${r.revision}. Endpoints will converge automatically through their normal heartbeat.`);await Promise.all([qc.invalidateQueries({queryKey:['rules']}),qc.invalidateQueries({queryKey:['rule-overrides']}),qc.invalidateQueries({queryKey:['rule-fleet-state']})]);}});
@@ -199,8 +224,8 @@ export default function Rules({session}:{session:Session}){
 
     <Section title="Endpoint rule convergence" open={sections.convergence} onToggle={()=>toggleSection('convergence')} summary={`${activeEndpoints} active · ${staleEndpoints} stale · ${failedEndpoints} failed`}>
       {!writable?<div className="notice" style={{margin:'0 16px 16px'}}>OPERATOR or ADMIN access is required to inspect endpoint rule convergence.</div>:convergence.isLoading?<div className="loading" style={{padding:'16px'}}>Loading endpoint rule state…</div>:convergence.error?<div className="login-error" style={{padding:'16px'}}>{(convergence.error as Error).message}</div>:fleet.length===0?<div className="notice" style={{margin:'0 16px 16px'}}>No active endpoints are enrolled.</div>:<>
-        <div className="notice" style={{margin:'0 16px 16px'}}>Rule changes are advertised on the normal AgentHello/Heartbeat response. Endpoints remain outbound-only: a stale endpoint fetches its endpoint-specific effective bundle over mTLS, validates it, activates it atomically, and ACKs ACTIVE or APPLY_FAILED.</div>
-        <div className="table-wrap"><table><thead><tr><th>Endpoint</th><th>Status</th><th>Desired</th><th>Active</th><th>Last ACK</th><th>Last seen</th><th>Error</th><th>Action</th></tr></thead><tbody>{fleet.map(s=><tr key={s.agentId}><td>{s.endpointName}<div className="mono" style={{opacity:.65}}>{s.agentId}</div></td><td>{badge(s.status||'UNKNOWN')}{s.refreshRequested&&<div style={{marginTop:'5px'}}>{badge('REFRESH REQUESTED')}</div>}</td><td className="mono">{hashLabel(s.desiredRevision,s.desiredSha256)}</td><td className="mono">{hashLabel(s.activeRevision,s.activeSha256)}</td><td>{timeLabel(s.lastAckAt)}</td><td>{timeLabel(s.lastSeenAt)}</td><td>{s.lastError||'-'}</td><td><button type="button" className="secondary small" disabled={refreshRules.isPending} onClick={()=>{if(confirm(`Request ${s.endpointName||s.agentId} to re-fetch and validate its effective rule policy on the next normal heartbeat?`))refreshRules.mutate(s.agentId);}}>Request rules refresh</button></td></tr>)}</tbody></table></div>
+        <div className="notice" style={{margin:'0 16px 16px'}}>Rule changes are advertised on the normal AgentHello/Heartbeat response. Endpoints remain outbound-only: a stale endpoint fetches its endpoint-specific effective bundle over mTLS, validates it, activates it atomically, and ACKs ACTIVE or APPLY_FAILED. In Desired/Active, click the revision to view that base bundle or the SHA to view the exact endpoint-effective bundle.</div>
+        <div className="table-wrap"><table><thead><tr><th>Endpoint</th><th>Status</th><th>Desired</th><th>Active</th><th>Last ACK</th><th>Last seen</th><th>Error</th><th>Action</th></tr></thead><tbody>{fleet.map(s=><tr key={s.agentId}><td>{s.endpointName}<div className="mono" style={{opacity:.65}}>{s.agentId}</div></td><td>{badge(s.status||'UNKNOWN')}{s.refreshRequested&&<div style={{marginTop:'5px'}}>{badge('REFRESH REQUESTED')}</div>}</td><td>{bundleCell(s,'desired')}</td><td>{bundleCell(s,'active')}</td><td>{timeLabel(s.lastAckAt)}</td><td>{timeLabel(s.lastSeenAt)}</td><td>{s.lastError||'-'}</td><td><button type="button" className="secondary small" disabled={refreshRules.isPending} onClick={()=>{if(confirm(`Request ${s.endpointName||s.agentId} to re-fetch and validate its effective rule policy on the next normal heartbeat?`))refreshRules.mutate(s.agentId);}}>Request rules refresh</button></td></tr>)}</tbody></table></div>
         {refreshRules.error&&<div className="login-error" style={{padding:'12px 16px'}}>{(refreshRules.error as Error).message}</div>}
       </>}
     </Section>
