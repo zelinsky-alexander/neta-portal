@@ -18,7 +18,7 @@ type SectionKey='defaultRules'|'summary'|'convergence'|'yara'|'learning'|'custom
 type SectionState=Record<SectionKey,boolean>;
 
 const SECTION_STORAGE_KEY='neta.rules.sections.v1';
-const defaultSections:SectionState={defaultRules:true,summary:false,convergence:true,yara:false,learning:false,customRules:false,publish:false};
+const defaultSections:SectionState={defaultRules:true,summary:false,convergence:false,yara:false,learning:false,customRules:false,publish:false};
 
 const customEngines=[
   'PROC-001','PROC-002','PROC-003','PROC-004','PROC-005',
@@ -170,14 +170,6 @@ export default function Rules({session}:{session:Session}){
       <div className="notice" style={{margin:'0 16px 16px'}}>Per-rule exclusions skip evaluation/reporting when any configured process, path, user, destination, domain, port or direction matches. Approved endpoint tuning is layered over the published base bundle only for the selected endpoint.</div>
     </Section>
 
-    <Section title="Endpoint rule convergence" open={sections.convergence} onToggle={()=>toggleSection('convergence')} summary={`${activeEndpoints} active · ${staleEndpoints} stale · ${failedEndpoints} failed`}>
-      {!writable?<div className="notice" style={{margin:'0 16px 16px'}}>OPERATOR or ADMIN access is required to inspect endpoint rule convergence.</div>:convergence.isLoading?<div className="loading" style={{padding:'16px'}}>Loading endpoint rule state…</div>:convergence.error?<div className="login-error" style={{padding:'16px'}}>{(convergence.error as Error).message}</div>:fleet.length===0?<div className="notice" style={{margin:'0 16px 16px'}}>No active endpoints are enrolled.</div>:<>
-        <div className="notice" style={{margin:'0 16px 16px'}}>Rule changes are advertised on the normal AgentHello/Heartbeat response. Endpoints remain outbound-only: a stale endpoint fetches its endpoint-specific effective bundle over mTLS, validates it, activates it atomically, and ACKs ACTIVE or APPLY_FAILED.</div>
-        <div className="table-wrap"><table><thead><tr><th>Endpoint</th><th>Status</th><th>Desired</th><th>Active</th><th>Last ACK</th><th>Last seen</th><th>Error</th><th>Action</th></tr></thead><tbody>{fleet.map(s=><tr key={s.agentId}><td>{s.endpointName}<div className="mono" style={{opacity:.65}}>{s.agentId}</div></td><td>{badge(s.status||'UNKNOWN')}{s.refreshRequested&&<div style={{marginTop:'5px'}}>{badge('REFRESH REQUESTED')}</div>}</td><td className="mono">{hashLabel(s.desiredRevision,s.desiredSha256)}</td><td className="mono">{hashLabel(s.activeRevision,s.activeSha256)}</td><td>{timeLabel(s.lastAckAt)}</td><td>{timeLabel(s.lastSeenAt)}</td><td>{s.lastError||'-'}</td><td><button type="button" className="secondary small" disabled={refreshRules.isPending} onClick={()=>{if(confirm(`Request ${s.endpointName||s.agentId} to re-fetch and validate its effective rule policy on the next normal heartbeat?`))refreshRules.mutate(s.agentId);}}>Request rules refresh</button></td></tr>)}</tbody></table></div>
-        {refreshRules.error&&<div className="login-error" style={{padding:'12px 16px'}}>{(refreshRules.error as Error).message}</div>}
-      </>}
-    </Section>
-
     <Section title="YARA-X" open={sections.yara} onToggle={()=>toggleSection('yara')} summary="Centrally managed artifact-scanning content">
       <div style={{padding:'0 16px 16px'}}><YaraContentSummary/></div>
     </Section>
@@ -203,6 +195,14 @@ export default function Rules({session}:{session:Session}){
         <div className="toolbar"><button type="button" onClick={()=>publish.mutate()} disabled={!writable||publish.isPending}>{publish.isPending?'Publishing…':'Publish current catalog'}</button></div>
         {publish.error&&<div className="login-error">{(publish.error as Error).message}</div>}
       </div>
+    </Section>
+
+    <Section title="Endpoint rule convergence" open={sections.convergence} onToggle={()=>toggleSection('convergence')} summary={`${activeEndpoints} active · ${staleEndpoints} stale · ${failedEndpoints} failed`}>
+      {!writable?<div className="notice" style={{margin:'0 16px 16px'}}>OPERATOR or ADMIN access is required to inspect endpoint rule convergence.</div>:convergence.isLoading?<div className="loading" style={{padding:'16px'}}>Loading endpoint rule state…</div>:convergence.error?<div className="login-error" style={{padding:'16px'}}>{(convergence.error as Error).message}</div>:fleet.length===0?<div className="notice" style={{margin:'0 16px 16px'}}>No active endpoints are enrolled.</div>:<>
+        <div className="notice" style={{margin:'0 16px 16px'}}>Rule changes are advertised on the normal AgentHello/Heartbeat response. Endpoints remain outbound-only: a stale endpoint fetches its endpoint-specific effective bundle over mTLS, validates it, activates it atomically, and ACKs ACTIVE or APPLY_FAILED.</div>
+        <div className="table-wrap"><table><thead><tr><th>Endpoint</th><th>Status</th><th>Desired</th><th>Active</th><th>Last ACK</th><th>Last seen</th><th>Error</th><th>Action</th></tr></thead><tbody>{fleet.map(s=><tr key={s.agentId}><td>{s.endpointName}<div className="mono" style={{opacity:.65}}>{s.agentId}</div></td><td>{badge(s.status||'UNKNOWN')}{s.refreshRequested&&<div style={{marginTop:'5px'}}>{badge('REFRESH REQUESTED')}</div>}</td><td className="mono">{hashLabel(s.desiredRevision,s.desiredSha256)}</td><td className="mono">{hashLabel(s.activeRevision,s.activeSha256)}</td><td>{timeLabel(s.lastAckAt)}</td><td>{timeLabel(s.lastSeenAt)}</td><td>{s.lastError||'-'}</td><td><button type="button" className="secondary small" disabled={refreshRules.isPending} onClick={()=>{if(confirm(`Request ${s.endpointName||s.agentId} to re-fetch and validate its effective rule policy on the next normal heartbeat?`))refreshRules.mutate(s.agentId);}}>Request rules refresh</button></td></tr>)}</tbody></table></div>
+        {refreshRules.error&&<div className="login-error" style={{padding:'12px 16px'}}>{(refreshRules.error as Error).message}</div>}
+      </>}
     </Section>
   </main>;
 }
