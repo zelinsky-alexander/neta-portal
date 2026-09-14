@@ -8,16 +8,17 @@ type Rule={id:string;revision:number;origin:'DEFAULT'|'CUSTOM';engineRuleId:stri
 type RuleSetSummary={revision:number;version:string;sha256:string;publishedAt:string};
 type Catalog={items:Rule[];activeRuleSet:RuleSetSummary|null};
 type RuleOverride={overrideId:number;scopeType:'ENDPOINT'|'GROUP'|'GLOBAL';scopeId:string|null;ruleId:string;enabledOverride:boolean|null;parametersPatch:Record<string,unknown>;exclusionsPatch:Record<string,unknown>;status:'STAGED'|'APPROVED'|'RETIRED';sourceFeedbackId:number|null;reason:string;createdBy:string;createdAt:string;approvedAt:string|null;endpointName:string|null};
+type RuleFleetState={agentId:string;endpointName:string;desiredRevision:number|null;desiredSha256:string|null;activeRevision:number|null;activeSha256:string|null;status:string;lastError:string|null;updatedAt:string|null;refreshRequestedAt:string|null;lastAckAt:string|null;lastSeenAt:string|null;refreshRequested:boolean;fetchRequired:boolean};
 type LearningState={agentId:string;endpointName:string;mode:'OFF'|'LEARNING'|'READY_FOR_REVIEW';startedAt:string|null;learningUntil:string|null;minimumObservations:number;updatedAt:string|null;candidateCount:number;maxObservations:number};
 type BaselineCandidate={candidateId:number;agentId:string;endpointName:string;ruleId:string|null;candidateType:string;candidateKey:string;evidenceJson:string;observationCount:number;firstSeen:string;lastSeen:string;status:string;readyForReview:boolean};
 type LearningOverview={states:LearningState[];candidates:BaselineCandidate[]};
 type ApiError={error?:string};
 type Editor={id:string;engineRuleId:string;name:string;severity:string;enabled:boolean;parameters:string;exclude:string};
-type SectionKey='defaultRules'|'summary'|'yara'|'learning'|'customRules'|'publish';
+type SectionKey='defaultRules'|'summary'|'convergence'|'yara'|'learning'|'customRules'|'publish';
 type SectionState=Record<SectionKey,boolean>;
 
 const SECTION_STORAGE_KEY='neta.rules.sections.v1';
-const defaultSections:SectionState={defaultRules:true,summary:false,yara:false,learning:false,customRules:false,publish:false};
+const defaultSections:SectionState={defaultRules:true,summary:false,convergence:true,yara:false,learning:false,customRules:false,publish:false};
 
 const customEngines=[
   'PROC-001','PROC-002','PROC-003','PROC-004','PROC-005',
@@ -41,13 +42,15 @@ async function mutate<T>(method:'POST'|'PUT',path:string,body:unknown,session:Se
   if(!r.ok){const b=await r.json().catch(()=>({} as ApiError)) as ApiError;throw new Error(b.error??`HTTP ${r.status}`);}return r.json() as Promise<T>;
 }
 function canWrite(session:Session){return session.role==='OPERATOR'||session.role==='ADMIN';}
-function badge(value:string){const n=value.toLowerCase();const tone=n==='default'?'muted':n==='custom'||n==='approved'||n==='learning'?'ok':n==='high'||n==='retired'?'danger':n==='medium'||n==='staged'||n==='ready_for_review'?'warn':'muted';return <span className={`badge ${tone}`}>{value}</span>;}
+function badge(value:string){const n=value.toLowerCase();const tone=n==='default'?'muted':n==='custom'||n==='approved'||n==='learning'||n==='active'?'ok':n==='high'||n==='retired'||n==='apply_failed'?'danger':n==='medium'||n==='staged'||n==='ready_for_review'||n==='stale'?'warn':'muted';return <span className={`badge ${tone}`}>{value}</span>;}
 function pretty(value:Record<string,unknown>){return JSON.stringify(value,null,2);}
 function displayRuleId(id:string){if(id.startsWith('NETA-'))return id.slice(5);if(id.startsWith('CUS-'))return `CST-${id.slice(4)}`;return id;}
 function emptyEditor():Editor{return{id:'',engineRuleId:'BEH-001',name:'',severity:'medium',enabled:true,parameters:'{}',exclude:'{}'};}
 function parseObject(text:string,label:string):Record<string,unknown>{
   try{const parsed=JSON.parse(text) as unknown;if(!parsed||typeof parsed!=='object'||Array.isArray(parsed))throw new Error();return parsed as Record<string,unknown>;}catch{throw new Error(`${label} must be a valid JSON object.`);}
 }
+function hashLabel(revision:number|null,sha:string|null){return revision==null&& !sha?'-':`r${revision??'-'} ${sha?sha.slice(0,16)+'…':'-'}`;}
+function timeLabel(value:string|null){if(!value)return '-';const d=new Date(value);return Number.isFinite(d.getTime())?d.toLocaleString():value;}
 function loadSections():SectionState{
   if(typeof window==='undefined')return defaultSections;
   try{
@@ -77,6 +80,7 @@ export default function Rules({session}:{session:Session}){
   const q=useQuery({queryKey:['rules'],queryFn:getCatalog,refetchInterval:15000});
   const writable=canWrite(session);
   const overrides=useQuery({queryKey:['rule-overrides'],queryFn:()=>getJson<RuleOverride[]>('/rule-overrides'),enabled:writable,refetchInterval:15000});
+  const convergence=useQuery({queryKey:['rule-fleet-state'],queryFn:()=>getJson<RuleFleetState[]>('/rules/fleet-state'),enabled:writable,refetchInterval:10000});
   const learning=useQuery({queryKey:['learning'],queryFn:()=>getJson<LearningOverview>('/learning'),enabled:writable,refetchInterval:10000});
   const[editor,setEditor]=useState<Editor>(emptyEditor());
   const[mode,setMode]=useState<'create'|'edit'>('create');
@@ -100,8 +104,9 @@ export default function Rules({session}:{session:Session}){
   function ruleIdControl(rule:Rule){const label=displayRuleId(rule.id);if(!writable)return <span className="mono rule-id-text" title={label}>{label}</span>;return <button type="button" className="rule-id-link mono" title={`Edit ${label}`} onClick={()=>edit(rule)}>{label}</button>;}
 
   const save=useMutation({mutationFn:async()=>{const parameters=parseObject(editor.parameters,'Parameters');const exclude=parseObject(editor.exclude,'Exclusions');if(mode==='create')return mutate<Rule>('POST','/rules/custom',{id:editor.id||undefined,engineRuleId:editor.engineRuleId,name:editor.name,severity:editor.severity,enabled:editor.enabled,parameters,exclude},session);return mutate<Rule>('PUT',`/rules/${encodeURIComponent(editingId)}`,{name:editor.name,severity:editor.severity,enabled:editor.enabled,parameters,exclude},session);},onSuccess:async r=>{setNotice(`${r.id} revision ${r.revision} saved in the central catalog. Publish to make it the fleet target.`);await qc.invalidateQueries({queryKey:['rules']});}});
-  const publish=useMutation({mutationFn:()=>mutate<any>('POST','/rule-sets/publish',{},session),onSuccess:async r=>{setNotice(`Published ${r.version} revision ${r.revision}. Each endpoint now has a desired effective hash including any approved endpoint overrides.`);await Promise.all([qc.invalidateQueries({queryKey:['rules']}),qc.invalidateQueries({queryKey:['rule-overrides']})]);}});
-  const overrideAction=useMutation({mutationFn:({id,action}:{id:number;action:'approve'|'retire'})=>mutate<RuleOverride>('POST',`/rule-overrides/${id}/${action}`,{},session),onSuccess:async r=>{setNotice(`${displayRuleId(r.ruleId)} override #${r.overrideId} is now ${r.status}. Endpoint ${r.endpointName??r.scopeId??'-'} has a new desired effective rule hash and must run rules-update.`);await Promise.all([qc.invalidateQueries({queryKey:['rule-overrides']}),qc.invalidateQueries({queryKey:['rules']})]);}});
+  const publish=useMutation({mutationFn:()=>mutate<any>('POST','/rule-sets/publish',{},session),onSuccess:async r=>{setNotice(`Published ${r.version} revision ${r.revision}. Endpoints will converge automatically through their normal heartbeat.`);await Promise.all([qc.invalidateQueries({queryKey:['rules']}),qc.invalidateQueries({queryKey:['rule-overrides']}),qc.invalidateQueries({queryKey:['rule-fleet-state']})]);}});
+  const overrideAction=useMutation({mutationFn:({id,action}:{id:number;action:'approve'|'retire'})=>mutate<RuleOverride>('POST',`/rule-overrides/${id}/${action}`,{},session),onSuccess:async r=>{setNotice(`${displayRuleId(r.ruleId)} override #${r.overrideId} is now ${r.status}. Endpoint ${r.endpointName??r.scopeId??'-'} will converge automatically on its next normal heartbeat.`);await Promise.all([qc.invalidateQueries({queryKey:['rule-overrides']}),qc.invalidateQueries({queryKey:['rules']}),qc.invalidateQueries({queryKey:['rule-fleet-state']})]);}});
+  const refreshRules=useMutation({mutationFn:(agentId:string)=>mutate<RuleFleetState>('POST',`/rules/refresh/${encodeURIComponent(agentId)}`,{},session),onSuccess:async r=>{setNotice(`Rule refresh requested for ${r.endpointName||r.agentId}. The endpoint will re-fetch and validate policy on its next normal heartbeat.`);await qc.invalidateQueries({queryKey:['rule-fleet-state']});}});
   const learningAction=useMutation({mutationFn:({agent,action}:{agent:string;action:'start'|'review'|'off'})=>mutate<LearningState>('POST',`/learning/${encodeURIComponent(agent)}/${action}`,action==='start'?{minimumObservations:learningMinimum,hours:learningHours}:{},session),onSuccess:async r=>{setLearningAgent(r.agentId);setNotice(`Learning for ${r.endpointName||r.agentId} is ${r.mode}. Candidates are observation-only and do not alter detection policy.`);await qc.invalidateQueries({queryKey:['learning']});}});
 
   if(q.isLoading)return <main><header className="page-header"><div><h1>Rules</h1><p>Central detection policy</p></div></header><div className="panel loading">Loading…</div></main>;
@@ -113,6 +118,10 @@ export default function Rules({session}:{session:Session}){
   const customRules=allRules.filter(r=>r.origin==='CUSTOM');
   const staged=(overrides.data??[]).filter(o=>o.status==='STAGED');
   const approved=(overrides.data??[]).filter(o=>o.status==='APPROVED');
+  const fleet=convergence.data??[];
+  const activeEndpoints=fleet.filter(s=>s.status==='ACTIVE'&&!s.refreshRequested).length;
+  const staleEndpoints=fleet.filter(s=>s.status==='STALE'||s.refreshRequested).length;
+  const failedEndpoints=fleet.filter(s=>s.status==='APPLY_FAILED').length;
   const learningStates=learning.data?.states??[];
   const learningCandidates=learning.data?.candidates??[];
 
@@ -161,6 +170,14 @@ export default function Rules({session}:{session:Session}){
       <div className="notice" style={{margin:'0 16px 16px'}}>Per-rule exclusions skip evaluation/reporting when any configured process, path, user, destination, domain, port or direction matches. Approved endpoint tuning is layered over the published base bundle only for the selected endpoint.</div>
     </Section>
 
+    <Section title="Endpoint rule convergence" open={sections.convergence} onToggle={()=>toggleSection('convergence')} summary={`${activeEndpoints} active · ${staleEndpoints} stale · ${failedEndpoints} failed`}>
+      {!writable?<div className="notice" style={{margin:'0 16px 16px'}}>OPERATOR or ADMIN access is required to inspect endpoint rule convergence.</div>:convergence.isLoading?<div className="loading" style={{padding:'16px'}}>Loading endpoint rule state…</div>:convergence.error?<div className="login-error" style={{padding:'16px'}}>{(convergence.error as Error).message}</div>:fleet.length===0?<div className="notice" style={{margin:'0 16px 16px'}}>No active endpoints are enrolled.</div>:<>
+        <div className="notice" style={{margin:'0 16px 16px'}}>Rule changes are advertised on the normal AgentHello/Heartbeat response. Endpoints remain outbound-only: a stale endpoint fetches its endpoint-specific effective bundle over mTLS, validates it, activates it atomically, and ACKs ACTIVE or APPLY_FAILED.</div>
+        <div className="table-wrap"><table><thead><tr><th>Endpoint</th><th>Status</th><th>Desired</th><th>Active</th><th>Last ACK</th><th>Last seen</th><th>Error</th><th>Action</th></tr></thead><tbody>{fleet.map(s=><tr key={s.agentId}><td>{s.endpointName}<div className="mono" style={{opacity:.65}}>{s.agentId}</div></td><td>{badge(s.status||'UNKNOWN')}{s.refreshRequested&&<div style={{marginTop:'5px'}}>{badge('REFRESH REQUESTED')}</div>}</td><td className="mono">{hashLabel(s.desiredRevision,s.desiredSha256)}</td><td className="mono">{hashLabel(s.activeRevision,s.activeSha256)}</td><td>{timeLabel(s.lastAckAt)}</td><td>{timeLabel(s.lastSeenAt)}</td><td>{s.lastError||'-'}</td><td><button type="button" className="secondary small" disabled={refreshRules.isPending} onClick={()=>{if(confirm(`Request ${s.endpointName||s.agentId} to re-fetch and validate its effective rule policy on the next normal heartbeat?`))refreshRules.mutate(s.agentId);}}>Request rules refresh</button></td></tr>)}</tbody></table></div>
+        {refreshRules.error&&<div className="login-error" style={{padding:'12px 16px'}}>{(refreshRules.error as Error).message}</div>}
+      </>}
+    </Section>
+
     <Section title="YARA-X" open={sections.yara} onToggle={()=>toggleSection('yara')} summary="Centrally managed artifact-scanning content">
       <div style={{padding:'0 16px 16px'}}><YaraContentSummary/></div>
     </Section>
@@ -177,12 +194,12 @@ export default function Rules({session}:{session:Session}){
       <div className="toolbar" style={{padding:'0 16px 14px'}}><button type="button" onClick={create} disabled={!writable}>New custom rule</button></div>
       <RuleList items={customRules}/>
       {writable&&(mode==='create'||editingRule?.origin==='CUSTOM')&&<div style={{padding:'0 16px 16px'}}><RuleEditor/></div>}
-      {writable&&<div style={{borderTop:'1px solid rgba(125,145,175,.18)',paddingTop:'14px'}}><div className="toolbar" style={{padding:'0 16px 14px',flexWrap:'wrap'}}><strong>Endpoint tuning review</strong><span style={{opacity:.7}}>Staged {staged.length} · Approved {approved.length}</span></div>{overrides.isLoading?<div className="loading" style={{padding:'16px'}}>Loading tuning proposals…</div>:overrides.error?<div className="login-error" style={{padding:'16px'}}>{(overrides.error as Error).message}</div>:(overrides.data??[]).length===0?<div className="notice" style={{margin:'0 16px 16px'}}>No false-positive tuning proposals yet.</div>:<div className="table-wrap"><table><thead><tr><th>Status</th><th>Rule</th><th>Endpoint</th><th>Proposed change</th><th>Reason</th><th>Action</th></tr></thead><tbody>{(overrides.data??[]).map(o=><tr key={o.overrideId}><td>{badge(o.status)}</td><td><span className="mono">{displayRuleId(o.ruleId)}</span><div style={{opacity:.65}}>#{o.overrideId}</div></td><td>{o.endpointName??o.scopeId??o.scopeType}<div style={{opacity:.65}}>{o.scopeType}</div></td><td><code>{JSON.stringify(o.exclusionsPatch)}</code></td><td>{o.reason}</td><td>{o.status==='STAGED'?<button type="button" disabled={overrideAction.isPending} onClick={()=>{if(confirm(`Approve this endpoint-only override for ${o.endpointName??o.scopeId}? Only that endpoint will receive a changed effective bundle.`))overrideAction.mutate({id:o.overrideId,action:'approve'});}}>Approve</button>:o.status==='APPROVED'?<button type="button" className="secondary" disabled={overrideAction.isPending} onClick={()=>{if(confirm(`Retire override #${o.overrideId}? The endpoint will return to the remaining effective policy after its next rules-update.`))overrideAction.mutate({id:o.overrideId,action:'retire'});}}>Retire</button>:'-'}</td></tr>)}</tbody></table></div>}{overrideAction.error&&<div className="login-error" style={{padding:'12px 16px'}}>{(overrideAction.error as Error).message}</div>}</div>}
+      {writable&&<div style={{borderTop:'1px solid rgba(125,145,175,.18)',paddingTop:'14px'}}><div className="toolbar" style={{padding:'0 16px 14px',flexWrap:'wrap'}}><strong>Endpoint tuning review</strong><span style={{opacity:.7}}>Staged {staged.length} · Approved {approved.length}</span></div>{overrides.isLoading?<div className="loading" style={{padding:'16px'}}>Loading tuning proposals…</div>:overrides.error?<div className="login-error" style={{padding:'16px'}}>{(overrides.error as Error).message}</div>:(overrides.data??[]).length===0?<div className="notice" style={{margin:'0 16px 16px'}}>No false-positive tuning proposals yet.</div>:<div className="table-wrap"><table><thead><tr><th>Status</th><th>Rule</th><th>Endpoint</th><th>Proposed change</th><th>Reason</th><th>Action</th></tr></thead><tbody>{(overrides.data??[]).map(o=><tr key={o.overrideId}><td>{badge(o.status)}</td><td><span className="mono">{displayRuleId(o.ruleId)}</span><div style={{opacity:.65}}>#{o.overrideId}</div></td><td>{o.endpointName??o.scopeId??o.scopeType}<div style={{opacity:.65}}>{o.scopeType}</div></td><td><code>{JSON.stringify(o.exclusionsPatch)}</code></td><td>{o.reason}</td><td>{o.status==='STAGED'?<button type="button" disabled={overrideAction.isPending} onClick={()=>{if(confirm(`Approve this endpoint-only override for ${o.endpointName??o.scopeId}? Only that endpoint will receive a changed effective bundle and converge on its next heartbeat.`))overrideAction.mutate({id:o.overrideId,action:'approve'});}}>Approve</button>:o.status==='APPROVED'?<button type="button" className="secondary" disabled={overrideAction.isPending} onClick={()=>{if(confirm(`Retire override #${o.overrideId}? The endpoint will return to the remaining effective policy through heartbeat-driven convergence.`))overrideAction.mutate({id:o.overrideId,action:'retire'});}}>Retire</button>:'-'}</td></tr>)}</tbody></table></div>}{overrideAction.error&&<div className="login-error" style={{padding:'12px 16px'}}>{(overrideAction.error as Error).message}</div>}</div>}
     </Section>
 
     <Section title="Publish" open={sections.publish} onToggle={()=>toggleSection('publish')} summary={active?`Current: ${active.version} · revision ${active.revision}`:'No published rule set yet'}>
       <div style={{padding:'0 16px 16px'}}>
-        <p style={{marginTop:0}}>Publish the current catalog as the desired fleet rule set. Endpoint-specific approved overrides remain layered on top.</p>
+        <p style={{marginTop:0}}>Publish the current catalog as the desired fleet rule set. Endpoint-specific approved overrides remain layered on top. Endpoints automatically converge through their normal heartbeat; no inbound access is required.</p>
         <div className="toolbar"><button type="button" onClick={()=>publish.mutate()} disabled={!writable||publish.isPending}>{publish.isPending?'Publishing…':'Publish current catalog'}</button></div>
         {publish.error&&<div className="login-error">{(publish.error as Error).message}</div>}
       </div>
