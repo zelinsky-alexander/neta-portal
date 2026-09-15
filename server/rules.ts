@@ -89,6 +89,25 @@ export async function registerRuleRoutes(app:FastifyInstance,deps:Dependencies){
     return result;
   });
 
+  app.get('/portal-api/platform-profiles',async request=>{
+    const actor=requireSession(request); requireOperator(actor);
+    return coordinator.requestJson<unknown>('/api/v1/operator/platform-profiles',{admin:true,actor});
+  });
+
+  app.post('/portal-api/platform-profiles/:agent',async (request,reply)=>{
+    const actor=requireSession(request); requireOperator(actor);
+    const {agent}=request.params as {agent:string};
+    const body=bodyObject(request.body);
+    const profileId=typeof body.profileId==='string'?body.profileId.trim():'';
+    if(!profileId) throw Object.assign(new Error('profileId is required'),{statusCode:400});
+    const ids=requireOperationId(request as unknown as {headers:Record<string,unknown>});
+    const result=await coordinator.requestJson<unknown>(`/api/v1/operator/platform-profiles/${encodeURIComponent(agent)}`,{
+      method:'POST',jsonBody:{profileId},admin:true,actor,...ids
+    });
+    reply.header('x-request-id',ids.requestId);
+    return result;
+  });
+
   app.get('/portal-api/findings/:finding/confidence',async request=>{
     const actor=requireSession(request);
     const {finding}=request.params as {finding:string};
