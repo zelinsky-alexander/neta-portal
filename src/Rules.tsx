@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState, type FormEvent, type ReactNode } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import YaraContentSummary from './YaraContentSummary';
+import { PlatformProfilesPanel } from './PlatformProfiles';
 
 type Role='VIEWER'|'OPERATOR'|'ADMIN';
 type Session={authenticated:boolean;user?:string;role?:Role;csrfToken?:string};
@@ -14,14 +15,14 @@ type BaselineCandidate={candidateId:number;agentId:string;endpointName:string;ru
 type LearningOverview={states:LearningState[];candidates:BaselineCandidate[]};
 type ApiError={error?:string};
 type Editor={id:string;engineRuleId:string;name:string;severity:string;enabled:boolean;parameters:string;exclude:string};
-type SectionKey='defaultRules'|'summary'|'convergence'|'yara'|'learning'|'customRules'|'publish';
+type SectionKey='defaultRules'|'summary'|'yara'|'learning'|'customRules'|'profiles'|'publish'|'convergence';
 type SectionState=Record<SectionKey,boolean>;
 type BundleInspection={kind:string;agentId:string|null;endpointName:string|null;revision:number;version:string;sha256:string;bundle:unknown;appliedOverrideIds:number[];capturedAt:string|null};
 type BaselineReviewResult={candidateId:number;agentId:string;ruleId:string;status:'APPROVED'|'REJECTED';desiredRevision:number|null;desiredSha256:string|null;exclusionsPatch:Record<string,unknown>;reviewedBy:string;reviewedAt:string};
 type CandidatePreview={promotable:boolean;exclusionsPatch:Record<string,unknown>;explanation:string;evidence:Record<string,unknown>};
 
 const SECTION_STORAGE_KEY='neta.rules.sections.v1';
-const defaultSections:SectionState={defaultRules:true,summary:false,convergence:false,yara:false,learning:false,customRules:false,publish:false};
+const defaultSections:SectionState={defaultRules:true,summary:false,yara:false,learning:false,customRules:false,profiles:false,publish:false,convergence:false};
 
 const customEngines=[
   'PROC-001','PROC-002','PROC-003','PROC-004','PROC-005',
@@ -243,6 +244,10 @@ export default function Rules({session}:{session:Session}){
       <RuleList items={customRules}/>
       {writable&&(mode==='create'||editingRule?.origin==='CUSTOM')&&<div style={{padding:'0 16px 16px'}}><RuleEditor/></div>}
       {writable&&<div style={{borderTop:'1px solid rgba(125,145,175,.18)',paddingTop:'14px'}}><div className="toolbar" style={{padding:'0 16px 14px',flexWrap:'wrap'}}><strong>Endpoint tuning review</strong><span style={{opacity:.7}}>Staged {staged.length} · Approved {approved.length}</span></div>{overrides.isLoading?<div className="loading" style={{padding:'16px'}}>Loading tuning proposals…</div>:overrides.error?<div className="login-error" style={{padding:'16px'}}>{(overrides.error as Error).message}</div>:(overrides.data??[]).length===0?<div className="notice" style={{margin:'0 16px 16px'}}>No false-positive tuning proposals yet.</div>:<div className="table-wrap"><table><thead><tr><th>Status</th><th>Rule</th><th>Endpoint</th><th>Proposed change</th><th>Reason</th><th>Action</th></tr></thead><tbody>{(overrides.data??[]).map(o=><tr key={o.overrideId}><td>{badge(o.status)}</td><td><span className="mono">{displayRuleId(o.ruleId)}</span><div style={{opacity:.65}}>#{o.overrideId}</div></td><td>{o.endpointName??o.scopeId??o.scopeType}<div style={{opacity:.65}}>{o.scopeType}</div></td><td><code>{JSON.stringify(o.exclusionsPatch)}</code></td><td>{o.reason}</td><td>{o.status==='STAGED'?<button type="button" disabled={overrideAction.isPending} onClick={()=>{if(confirm(`Approve this endpoint-only override for ${o.endpointName??o.scopeId}? Only that endpoint will receive a changed effective bundle and converge on its next heartbeat.`))overrideAction.mutate({id:o.overrideId,action:'approve'});}}>Approve</button>:o.status==='APPROVED'?<button type="button" className="secondary" disabled={overrideAction.isPending} onClick={()=>{if(confirm(`Retire override #${o.overrideId}? The endpoint will return to the remaining effective policy through heartbeat-driven convergence.`))overrideAction.mutate({id:o.overrideId,action:'retire'});}}>Retire</button>:'-'}</td></tr>)}</tbody></table></div>}{overrideAction.error&&<div className="login-error" style={{padding:'12px 16px'}}>{(overrideAction.error as Error).message}</div>}</div>}
+    </Section>
+
+    <Section title="Platform profiles" open={sections.profiles} onToggle={()=>toggleSection('profiles')} summary="OS-specific deterministic rule-policy presets">
+      <PlatformProfilesPanel session={session} onNotice={setNotice}/>
     </Section>
 
     <Section title="Publish" open={sections.publish} onToggle={()=>toggleSection('publish')} summary={active?`Current: ${active.version} · revision ${active.revision}`:'No published rule set yet'}>
