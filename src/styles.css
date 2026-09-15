@@ -124,5 +124,53 @@ tbody tr:hover { background: #101d2f; }
 .severity-medium { color: #f6d34a; }
 .severity-low, .severity-info { color: #63a7ff; }
 .findings-summary-error { max-width: 560px; margin-left: auto; margin-top: -62px; }
+
+/* Learning-mode candidate review: keep the table compact and make review a focused popup. */
+.table-panel td > div.mono { display: none; }
+.table-wrap table:has(thead th:first-child input[type="checkbox"]) th:first-child,
+.table-wrap table:has(thead th:first-child input[type="checkbox"]) td:first-child {
+  width: 40px;
+  min-width: 40px;
+  max-width: 40px;
+  padding-left: 10px;
+  padding-right: 6px;
+  text-align: center;
+}
+.table-wrap table:has(thead th:first-child input[type="checkbox"]) th:first-child input,
+.table-wrap table:has(thead th:first-child input[type="checkbox"]) td:first-child input {
+  min-width: 0;
+  width: 15px;
+  height: 15px;
+  margin: 0;
+  padding: 0;
+}
+.table-wrap table:has(thead th:first-child input[type="checkbox"]) tbody tr:has(td:nth-child(2) .badge.warn) td:nth-child(9):not(:has(.badge)) {
+  font-size: 0;
+}
+.table-wrap table:has(thead th:first-child input[type="checkbox"]) tbody tr:has(td:nth-child(2) .badge.warn) td:nth-child(9):not(:has(.badge))::after {
+  content: "Pending";
+  font-size: 13px;
+  color: #c5cfdb;
+}
+.table-wrap:has(table thead th:first-child input[type="checkbox"]) ~ .action-form {
+  position: fixed;
+  z-index: 100;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: min(980px, calc(100vw - 40px));
+  max-height: calc(100vh - 48px);
+  overflow-y: auto;
+  margin: 0 !important;
+  padding: 22px !important;
+  border: 1px solid #31445f !important;
+  border-radius: 12px;
+  background: #0d1727;
+  box-shadow: 0 0 0 100vmax rgba(3,8,15,.76), 0 28px 80px rgba(0,0,0,.55);
+}
+.table-wrap:has(table thead th:first-child input[type="checkbox"]) ~ .action-form .detail > div > .mono {
+  display: none;
+}
+
 @media (max-width: 1050px) { .cards { grid-template-columns: repeat(2,1fr); } .shell { grid-template-columns: 190px 1fr; } main { padding: 28px 24px; } .findings-summary-wrap { margin-top: 0; } }
 @media (max-width: 720px) { .shell { display: block; } aside { position: static; height: auto; padding: 16px; } nav { display: flex; overflow-x: auto; } .aside-footer { display: none; } .brand { padding-bottom: 14px; } main { padding: 22px 14px 40px; } .cards, .split-panel, .details-grid, .form-grid { grid-template-columns: 1fr; } .detail.wide { grid-column: auto; } .toolbar, .row-actions { flex-wrap: wrap; } input, select { min-width: 0; flex: 1; } .checkbox-label { padding-top: 0; } .rules-desktop { display: none; } .rules-mobile { display: grid; } .table-panel > .toolbar { margin-bottom: 0; } .findings-summary-wrap { justify-content: stretch; } .findings-summary { width: 100%; } }
