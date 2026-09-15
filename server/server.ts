@@ -287,4 +287,3 @@ app.setErrorHandler((error,_request,reply)=>{
 const __dirname=path.dirname(fileURLToPath(import.meta.url)); const dist=path.resolve(__dirname,'../dist'); await app.register(fastifyStatic,{root:dist,wildcard:false});
 app.setNotFoundHandler((request,reply)=>request.url.startsWith('/portal-api/')?reply.code(404).send({error:'not found'}):reply.sendFile('index.html'));
 await app.listen({host:config.host,port:config.port});
-×M:ã†å¡·<—;õÞµ÷Nuóñýùq®9ßMŸ}Þ]÷G=å«®÷«þÇ«½êí
