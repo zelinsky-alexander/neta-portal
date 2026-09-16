@@ -28,7 +28,7 @@ const defaultSections:SectionState={defaultRules:true,summary:false,yara:false,l
 
 const customEngines=[
   'PROC-001','PROC-002','PROC-003','PROC-004','PROC-005',
-  'BEH-001','NET-001','NET-002','NET-003','NET-004',
+  'BEH-001','NET-001','NET-002','NET-003','NET-004','NET-005',
   'DNS-001','DNS-002','DNS-003','TLS-001','TLS-002','ROUTE-001'
 ];
 
