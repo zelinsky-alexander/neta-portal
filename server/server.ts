@@ -16,7 +16,7 @@ const coordinator = new CoordinatorClient(config);
 const app = Fastify({ logger: true, trustProxy: true, bodyLimit: 64 * 1024 });
 
 type Page<T> = { items: T[]; nextCursor: string | null; matched?: number | null };
-type AgentJson = { id: string; name: string; state: string; lastSeen: string | null; version: string | null; build: string | null; gitCommit: string | null; os: string | null; arch: string | null; artifactSha256: string | null; protocolVersion: number | null; schemaVersion: number | null; features: string | null; certificateSha256: string | null; enrolledAt: string | null; lastSequence: number };
+type AgentJson = { id: string; name: string; state: string; lastSeen: string | null; version: string | null; build: string | null; gitCommit: string | null; os: string | null; arch: string | null; artifactSha256: string | null; protocolVersion: number | null; schemaVersion: number | null; features: string | null; certificateSha256: string | null; enrolledAt: string | null; lastSequence: number; findingCount: number };
 type FindingJson = { id: string; agentId: string; agentName: string; subject: string | null; subjectType: string | null; subjectId: string | null; host: string | null; port: number | null; type: string | null; semanticType: string | null; severity: string | null; confidence: string | null; assessment: string | null; trust: string | null; performance: string | null; count: number; status: string | null; population: string | null; firstSeen: string | null; lastSeen: string | null; incidentId: string | null; observedFrom: string | null; observedTo: string | null; evidenceRoot: string | null; ruleSet: unknown };
 type FindingDetailJson = { id:string; findingKey:string; messageId:string; agentId:string; agentName:string; subject:string; subjectType:string|null; subjectId:string|null; host:string|null; port:number|null; type:string; ruleId:string|null; severity:string; confidence:string; assessment:string; trust:string|null; performance:string|null; status:string; count:number; firstSeen:string|null; lastSeen:string|null; receivedAt:string|null; observedFrom:string|null; observedTo:string|null; incidentId:string|null; evidenceRoot:string|null; changes:unknown; ruleSet:unknown; payload:unknown; protocol:unknown };
 type FindingBulkPreview = { count:number; bySeverity:Record<string,number>; byRule:Record<string,number>; byAgent:Record<string,number> };
@@ -164,7 +164,7 @@ app.get('/portal-api/agents', async (request) => {
   }
   const params = paramsFrom(query, ['cursor','search','status','platform']);
   const page = await coordinator.requestJson<Page<AgentJson>>(`/api/v1/agents?${params}`, { actor });
-  return { items: page.items.map((a) => ({ id:a.id,name:a.name,state:a.state,version:a.version??'-',build:a.build??'-',platform:platform(a.os,a.arch),lastSeen:a.lastSeen??'never' })), nextCursor:page.nextCursor, compatibilityMode:false };
+  return { items: page.items.map((a) => ({ id:a.id,name:a.name,state:a.state,version:a.version??'-',build:a.build??'-',platform:platform(a.os,a.arch),findingCount:a.findingCount??0,lastSeen:a.lastSeen??'never' })), nextCursor:page.nextCursor, compatibilityMode:false };
 });
 
 app.get('/portal-api/agents/:agent', async (request) => {
