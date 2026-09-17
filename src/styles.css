@@ -114,9 +114,13 @@ tbody tr:hover { background: #101d2f; }
 .rule-card-name { margin-top: 9px; color: #d4dce7; font-size: 14px; line-height: 1.4; }
 .rule-card-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin-top: 10px; color: #8090a6; font-size: 11px; }
 .findings-summary-wrap { display: flex; justify-content: flex-end; margin-top: -78px; margin-bottom: 16px; }
-.findings-summary { width: min(560px, 100%); padding: 15px 18px; display: flex; flex-direction: column; gap: 7px; }
-.findings-severity-line { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
-.findings-severity-line strong { margin-right: 2px; }
+.findings-summary { width: min(560px, 100%); padding: 13px 16px; font-size: 12px; }
+.findings-summary-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0; }
+.findings-summary-column { display: grid; gap: 5px; padding-right: 18px; }
+.findings-summary-column + .findings-summary-column { border-left: 1px solid #26364a; padding-left: 18px; padding-right: 0; }
+.findings-summary-column > div { display: flex; justify-content: space-between; gap: 14px; }
+.findings-summary-column strong { font-variant-numeric: tabular-nums; }
+.findings-oldest { margin-top: 10px; color: #91a0b4; }
 .severity-count { font-weight: 750; }
 .severity-separator { color: #56667b; }
 .severity-critical { color: #ff646f; }

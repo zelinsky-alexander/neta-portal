@@ -15,9 +15,9 @@ const config = loadConfig();
 const coordinator = new CoordinatorClient(config);
 const app = Fastify({ logger: true, trustProxy: true, bodyLimit: 64 * 1024 });
 
-type Page<T> = { items: T[]; nextCursor: string | null };
+type Page<T> = { items: T[]; nextCursor: string | null; matched?: number | null };
 type AgentJson = { id: string; name: string; state: string; lastSeen: string | null; version: string | null; build: string | null; gitCommit: string | null; os: string | null; arch: string | null; artifactSha256: string | null; protocolVersion: number | null; schemaVersion: number | null; features: string | null; certificateSha256: string | null; enrolledAt: string | null; lastSequence: number };
-type FindingJson = { id: string; agentId: string; agentName: string; subject: string | null; subjectType: string | null; subjectId: string | null; host: string | null; port: number | null; type: string | null; semanticType: string | null; severity: string | null; confidence: string | null; assessment: string | null; trust: string | null; performance: string | null; count: number; status: string | null; firstSeen: string | null; lastSeen: string | null; incidentId: string | null; observedFrom: string | null; observedTo: string | null; evidenceRoot: string | null; ruleSet: unknown };
+type FindingJson = { id: string; agentId: string; agentName: string; subject: string | null; subjectType: string | null; subjectId: string | null; host: string | null; port: number | null; type: string | null; semanticType: string | null; severity: string | null; confidence: string | null; assessment: string | null; trust: string | null; performance: string | null; count: number; status: string | null; population: string | null; firstSeen: string | null; lastSeen: string | null; incidentId: string | null; observedFrom: string | null; observedTo: string | null; evidenceRoot: string | null; ruleSet: unknown };
 type FindingDetailJson = { id:string; findingKey:string; messageId:string; agentId:string; agentName:string; subject:string; subjectType:string|null; subjectId:string|null; host:string|null; port:number|null; type:string; ruleId:string|null; severity:string; confidence:string; assessment:string; trust:string|null; performance:string|null; status:string; count:number; firstSeen:string|null; lastSeen:string|null; receivedAt:string|null; observedFrom:string|null; observedTo:string|null; incidentId:string|null; evidenceRoot:string|null; changes:unknown; ruleSet:unknown; payload:unknown; protocol:unknown };
 type FindingBulkPreview = { count:number; bySeverity:Record<string,number>; byRule:Record<string,number>; byAgent:Record<string,number> };
 type FindingBulkResult = { action:string; affected:number; message:string };
@@ -178,7 +178,13 @@ app.get('/portal-api/findings', async (request) => {
   const actor=currentSession(request); const query=request.query as Record<string,string|undefined>;
   if(config.legacyOperatorApi){const params=paramsFrom(query,['agent','trust','performance','status','target'],50);params.set('offset','0');return {...parseFindingSearch(await coordinator.request(`/api/v1/operator/finding-search?${params}`)),nextCursor:null,compatibilityMode:true};}
   const params=paramsFrom(query,['cursor','agent','trust','performance','status','target','severity','rule','assessment','olderThanSeconds','newerThanSeconds']); const page=await coordinator.requestJson<Page<FindingJson>>(`/api/v1/findings?${params}`,{actor});
-  return {items:page.items.map((f)=>({id:f.id,lastSeen:f.lastSeen??'-',agent:f.agentName,target:f.subject??networkSubject(f.host,f.port),subjectType:f.subjectType,subjectId:f.subjectId,host:f.host,port:f.port,type:f.type??'-',semanticType:f.semanticType??'-',severity:f.severity??'-',confidence:f.confidence??'-',assessment:f.assessment??'-',trust:f.trust,performance:f.performance,count:f.count,status:f.status??'-',incident:f.incidentId??'-',observedFrom:f.observedFrom,observedTo:f.observedTo,evidenceRoot:f.evidenceRoot,ruleSet:f.ruleSet})),nextCursor:page.nextCursor,compatibilityMode:false};
+  return {items:page.items.map((f)=>({id:f.id,lastSeen:f.lastSeen??'-',agent:f.agentName,target:f.subject??networkSubject(f.host,f.port),subjectType:f.subjectType,subjectId:f.subjectId,host:f.host,port:f.port,type:f.type??'-',semanticType:f.semanticType??'-',severity:f.severity??'-',confidence:f.confidence??'-',assessment:f.assessment??'-',trust:f.trust,performance:f.performance,count:f.count,status:f.status??'-',population:f.population??'-',incident:f.incidentId??'-',observedFrom:f.observedFrom,observedTo:f.observedTo,evidenceRoot:f.evidenceRoot,ruleSet:f.ruleSet})),nextCursor:page.nextCursor,matched:page.matched??null,compatibilityMode:false};
+});
+
+app.get('/portal-api/findings/summary', async (request) => {
+  const actor=currentSession(request);
+  if(config.legacyOperatorApi)throw new CoordinatorError('unified finding summary requires the structured coordinator API',409,'');
+  return coordinator.requestJson<unknown>('/api/v1/findings/summary',{actor});
 });
 
 app.get('/portal-api/findings/bulk-preview', async (request) => {
@@ -206,11 +212,11 @@ app.post('/portal-api/findings/bulk-purge', async (request, reply) => {
   if(config.legacyOperatorApi) throw new CoordinatorError('bulk finding operations require the structured coordinator API',409,'');
   const body=validation(()=>validateFindingBulk(request.body));
   const ids=operationHeaders(request as unknown as {headers:Record<string,unknown>});
-  const params=new URLSearchParams({reason:body.reason});
+  const params=new URLSearchParams({reason:body.reason,confirmed:'true'});
   if(body.agent)params.set('agent',body.agent); if(body.severity)params.set('severity',body.severity); if(body.rule)params.set('rule',body.rule); if(body.status)params.set('status',body.status); if(body.assessment)params.set('assessment',body.assessment); if(body.olderThanSeconds)params.set('olderThanSeconds',String(body.olderThanSeconds)); if(body.newerThanSeconds)params.set('newerThanSeconds',String(body.newerThanSeconds));
   const result=await coordinator.requestJson<FindingBulkResult>('/api/v1/operator/finding-bulk-purge',{method:'POST',body:params,admin:true,actor,...ids});
   reply.header('x-request-id',ids.requestId);
-  return {accepted:true,operation:'FINDINGS_BULK_PURGED',requestId:ids.requestId,idempotencyKey:ids.idempotencyKey,idempotencyEnforcedByCoordinator:false,affected:result.affected,message:result.message};
+  return {accepted:true,operation:'FINDINGS_BULK_PURGED',requestId:ids.requestId,idempotencyKey:ids.idempotencyKey,idempotencyEnforcedByCoordinator:true,affected:result.affected,message:result.message};
 });
 
 app.get('/portal-api/findings/:finding', async (request) => {
@@ -228,6 +234,12 @@ app.post('/portal-api/findings/:finding/false-positive', async (request, reply) 
   const actor=requireRole(request,'OPERATOR'); const {finding}=request.params as {finding:string}; const body=validation(()=>validateReason(request.body)); const ids=operationHeaders(request as unknown as {headers:Record<string,unknown>});
   const coordinatorResponse=await coordinator.request('/api/v1/operator/finding-false-positive',{method:'POST',body:new URLSearchParams({id:finding,reason:body.reason}),admin:true,actor,...ids}); reply.header('x-request-id',ids.requestId);
   return {accepted:true,operation:'FINDING_FALSE_POSITIVE',requestId:ids.requestId,idempotencyKey:ids.idempotencyKey,idempotencyEnforcedByCoordinator:false,coordinatorResponse};
+});
+
+app.post('/portal-api/findings/:finding/purge', async (request, reply) => {
+  const actor=requireRole(request,'ADMIN'); const {finding}=request.params as {finding:string}; const body=validation(()=>validateReason(request.body)); const ids=operationHeaders(request as unknown as {headers:Record<string,unknown>});
+  const result=await coordinator.requestJson<FindingBulkResult>('/api/v1/operator/finding-purge',{method:'POST',body:new URLSearchParams({id:finding,reason:body.reason,confirmed:'true'}),admin:true,actor,...ids}); reply.header('x-request-id',ids.requestId);
+  return {accepted:true,operation:'FINDING_PURGED',requestId:ids.requestId,idempotencyKey:ids.idempotencyKey,idempotencyEnforcedByCoordinator:true,affected:result.affected,message:result.message};
 });
 
 app.get('/portal-api/upgrades', async (request) => {

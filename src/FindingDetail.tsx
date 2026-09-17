@@ -26,7 +26,7 @@ type ArtifactEvidenceItem={
   matches:unknown; observedAt:string|null; firstSeen:string; lastSeen:string; observationCount:number;
 };
 type ArtifactEvidencePage={items:ArtifactEvidenceItem[];count:number;limit:number};
-type ResolutionAction='dismiss'|'suppress'|'tune';
+type ResolutionAction='dismiss'|'suppress'|'tune'|'purge';
 type TuneScope='ENDPOINT'|'GROUP'|'GLOBAL';
 type TuneAction='NONE'|'PROPOSE_RULE_EXCLUSION'|'PROPOSE_BASELINE';
 
@@ -39,6 +39,7 @@ async function postJson<T>(path:string,body:unknown,session:Session,key:string):
   if(!response.ok){const payload=await response.json().catch(()=>({} as ApiError)) as ApiError;throw new Error(payload.error??`HTTP ${response.status}`);} return response.json() as Promise<T>;
 }
 function allowed(session:Session){return session.role==='OPERATOR'||session.role==='ADMIN';}
+function canPurge(session:Session){return session.role==='ADMIN';}
 function pretty(value:unknown){return JSON.stringify(value??null,null,2);}
 function value(v:string|null|undefined){return v&&v.trim()?v:'-';}
 function statusTone(v:string){const n=v.toLowerCase();return n.includes('critical')||n.includes('high')||n.includes('suspicious')||n==='match'?'danger':n.includes('medium')||n.includes('changed')||n.includes('scan_error')?'warn':n.includes('active')||n.includes('low')||n==='no_match'?'ok':'muted';}
@@ -48,6 +49,7 @@ function Field({label,value:v,mono=false,wide=false}:{label:string;value:React.R
 export default function FindingDetail({session}:{session:Session}){
   const {finding=''}=useParams(); const navigate=useNavigate(); const qc=useQueryClient();
   const[reason,setReason]=useState('');
+  const[purgeReason,setPurgeReason]=useState('');
   const[scope,setScope]=useState<TuneScope>('ENDPOINT');
   const[tuneAction,setTuneAction]=useState<TuneAction>('PROPOSE_RULE_EXCLUSION');
   const q=useQuery({queryKey:['finding-detail',finding],queryFn:()=>getJson<FindingDetailData>(`/findings/${encodeURIComponent(finding)}`),enabled:Boolean(finding)});
@@ -55,7 +57,7 @@ export default function FindingDetail({session}:{session:Session}){
   const artifacts=useQuery({queryKey:['artifact-evidence',q.data?.agentId],queryFn:()=>getJson<ArtifactEvidencePage>(`/artifacts/evidence?agentId=${encodeURIComponent(q.data!.agentId)}&limit=20`),enabled:Boolean(q.data?.agentId),refetchInterval:10000});
   const mutation=useMutation({
     mutationFn:({action}:{action:ResolutionAction})=>{
-      const body=action==='tune'?{reason,scope,action:tuneAction}:{reason};
+      const body=action==='purge'?{reason:purgeReason}:action==='tune'?{reason,scope,action:tuneAction}:{reason};
       return postJson<OperationResult>(`/findings/${encodeURIComponent(finding)}/${action}`,body,session,`finding:${action}:${crypto.randomUUID()}`);
     },
     onSuccess:async(result)=>{await Promise.all([qc.invalidateQueries({queryKey:['findings']}),qc.invalidateQueries({queryKey:['dashboard']})]);alert(result.coordinatorResponse??result.operation);navigate('/findings');}
@@ -68,6 +70,10 @@ export default function FindingDetail({session}:{session:Session}){
         ? 'Suppress this exact agent/finding pattern? The active finding closes and the same exact key will not immediately reappear. The detection rule is not changed.'
         : `Mark this finding false positive and stage ${tuneAction==='NONE'?'no policy change':tuneAction.replaceAll('_',' ').toLowerCase()} for ${scope.toLowerCase()} scope? No exact suppression will be created.`;
     if(confirm(wording))mutation.mutate({action});
+  }
+  function purge(){
+    if(!purgeReason.trim()||!canPurge(session))return;
+    if(confirm('Permanently delete this finding and clean its incident relationships? This cannot be undone.'))mutation.mutate({action:'purge'});
   }
   if(q.isLoading)return <main><div className="panel loading">Loading finding…</div></main>;
   if(q.error)return <main><div className="panel error-panel"><strong>Unable to load finding</strong><span>{(q.error as Error).message}</span><Link to="/findings">Back to findings</Link></div></main>;
@@ -145,6 +151,13 @@ export default function FindingDetail({session}:{session:Session}){
       </div>
       {!allowed(session)&&<div className="notice danger-notice">OPERATOR or ADMIN role is required to resolve or tune findings.</div>}
       {mutation.error&&<div className="login-error">{(mutation.error as Error).message}</div>}
+    </div>
+    <div className="panel action-form">
+      <h3>Permanent purge</h3>
+      <div className="notice danger-notice">ADMIN only. This physically deletes the finding after coordinator audit and relationship cleanup. Use resolution or suppression when evidence history should remain.</div>
+      <label>Purge reason<textarea value={purgeReason} onChange={e=>setPurgeReason(e.target.value)} maxLength={1000} disabled={!canPurge(session)||mutation.isPending} placeholder="Why must this retained evidence be permanently deleted?"/></label>
+      <button type="button" className="danger" disabled={!canPurge(session)||!purgeReason.trim()||mutation.isPending} onClick={purge}>Permanently purge this finding</button>
+      {!canPurge(session)&&<div className="notice danger-notice" style={{marginTop:'10px'}}>ADMIN role is required for permanent purge.</div>}
     </div>
     <div className="panel"><h3>Observed changes</h3><pre>{pretty(f.changes)}</pre></div>
     <div className="panel"><h3>Rule set</h3><pre>{pretty(f.ruleSet)}</pre></div>
