@@ -1,3 +1,4 @@
+import { demoUser, demoRequestAllowed, sessionScopes } from './demo.js';
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -63,11 +64,15 @@ function mutationGuard(request: { headers: Record<string, unknown> }, session: P
 
 app.addHook('onRequest', async (request, reply) => {
   if (!request.url.startsWith('/portal-api/')) return;
-  if (request.url === '/portal-api/health' || request.url === '/portal-api/auth/login') return;
+  if (request.url === '/portal-api/health' || request.url === '/portal-api/auth/login' || request.url === '/portal-api/auth/demo') return;
   const token = cookieValue(request.headers.cookie, 'neta_session');
   const session = verifySession(token, config.sessionSecret);
   if (request.url === '/portal-api/auth/session' && !session) return;
   if (!session) return reply.code(401).send({ error: 'authentication required' });
+  reply.header('cache-control', 'no-store');
+  if (session.tenantId === 'demo' && (!config.demoEnabled || !demoRequestAllowed(request.method, request.url))) {
+    return reply.code(403).send({ error: 'Demo access is read-only and limited to demo endpoints and findings' });
+  }
   (request as unknown as PortalRequest).portalSession = session;
   if (['POST','PUT','PATCH','DELETE'].includes(request.method)) {
     const error = mutationGuard(request as unknown as { headers: Record<string, unknown> }, session);
@@ -115,6 +120,18 @@ await registerRuleRoutes(app,{coordinator,requireSession:currentSession,requireO
 
 app.get('/portal-api/health', async () => ({ status: 'UP' }));
 
+app.post('/portal-api/auth/demo', async (_request, reply) => {
+  if (!config.demoEnabled) return reply.code(403).send({ error: 'Demo access is disabled' });
+  const created = createSession(demoUser, config.sessionSecret, Math.min(config.sessionTtlSeconds, 3600));
+  // Check the database grant before issuing any browser session.
+  await coordinator.requestJson('/api/v1/demo/access', { actor: created.session });
+  reply.header('set-cookie', sessionCookie(created.token, created.session.exp - created.session.iat));
+  reply.header('cache-control', 'no-store');
+  return { authenticated: true, user: 'demo', role: 'VIEWER', tenantId: 'demo',
+    scopes: ['agents:read', 'findings:read'], csrfToken: created.session.csrf,
+    expiresAt: new Date(created.session.exp * 1000).toISOString() };
+});
+
 app.post('/portal-api/auth/login', async (request, reply) => {
   const body = request.body as Record<string, unknown> | null;
   const username = typeof body?.username === 'string' ? body.username : '';
@@ -125,7 +142,7 @@ app.post('/portal-api/auth/login', async (request, reply) => {
   const created = createSession(user, config.sessionSecret, config.sessionTtlSeconds);
   reply.header('set-cookie', sessionCookie(created.token, config.sessionTtlSeconds));
   reply.header('cache-control', 'no-store');
-  return { authenticated: true, user: created.session.sub, role: created.session.role, scopes: scopesFor(created.session.role), csrfToken: created.session.csrf, expiresAt: new Date(created.session.exp * 1000).toISOString() };
+  return { authenticated: true, user: created.session.sub, role: created.session.role, tenantId: created.session.tenantId, scopes: sessionScopes(created.session, scopesFor(created.session.role)), csrfToken: created.session.csrf, expiresAt: new Date(created.session.exp * 1000).toISOString() };
 });
 
 app.get('/portal-api/auth/session', async (request, reply) => {
@@ -133,7 +150,7 @@ app.get('/portal-api/auth/session', async (request, reply) => {
   const session = verifySession(token, config.sessionSecret);
   reply.header('cache-control', 'no-store');
   if (!session) return { authenticated: false };
-  return { authenticated: true, user: session.sub, role: session.role, scopes: scopesFor(session.role), csrfToken: session.csrf, expiresAt: new Date(session.exp * 1000).toISOString() };
+  return { authenticated: true, user: session.sub, role: session.role, tenantId: session.tenantId, scopes: sessionScopes(session, scopesFor(session.role)), csrfToken: session.csrf, expiresAt: new Date(session.exp * 1000).toISOString() };
 });
 
 app.post('/portal-api/auth/logout', async (_request, reply) => {
@@ -144,6 +161,12 @@ app.post('/portal-api/auth/logout', async (_request, reply) => {
 
 app.get('/portal-api/system', async (request) => {
   const actor = currentSession(request);
+  if (actor.tenantId === 'demo') {
+    await coordinator.requestJson('/api/v1/demo/access', { actor });
+    return { portal: { status: 'UP', version: '0.3.0' }, coordinator: { status: 'UP' },
+      adminConfigured: false, portalServiceAuthorizationConfigured: true,
+      identity: { user: actor.sub, role: actor.role, tenantId: actor.tenantId, scopes: ['agents:read', 'findings:read'] } };
+  }
   const health = await coordinator.requestJson<unknown>('/actuator/health');
   return {
     portal: { status: 'UP', version: '0.3.0' }, coordinator: health, coordinatorUrl: config.coordinatorUrl.origin,
@@ -155,7 +178,7 @@ app.get('/portal-api/system', async (request) => {
 
 app.get('/portal-api/agents', async (request) => {
   const actor = currentSession(request); const query = request.query as Record<string, string | undefined>;
-  if (config.legacyOperatorApi) {
+  if (config.legacyOperatorApi && actor.tenantId !== 'demo') {
     const raw = await coordinator.request('/api/v1/operator/agents'); let items = parseAgents(raw);
     if (query.search) items = items.filter((a) => `${a.name} ${a.id}`.toLowerCase().includes(query.search!.toLowerCase()));
     if (query.status) items = items.filter((a) => a.state.toLowerCase() === query.status!.toLowerCase());
@@ -169,27 +192,27 @@ app.get('/portal-api/agents', async (request) => {
 
 app.get('/portal-api/agents/:agent', async (request) => {
   const actor = currentSession(request); const { agent } = request.params as { agent:string };
-  if (config.legacyOperatorApi) { const raw=await coordinator.request(`/api/v1/operator/agent-admin?agent=${encodeURIComponent(agent)}`); return {agent,details:parseKeyValues(raw),raw,compatibilityMode:true}; }
+  if (config.legacyOperatorApi && actor.tenantId !== 'demo') { const raw=await coordinator.request(`/api/v1/operator/agent-admin?agent=${encodeURIComponent(agent)}`); return {agent,details:parseKeyValues(raw),raw,compatibilityMode:true}; }
   const a=await coordinator.requestJson<AgentJson>(`/api/v1/agents/${encodeURIComponent(agent)}`, { actor });
   return { agent:a.id, compatibilityMode:false, details:{agent:a.name,agent_id:a.id,enrollment_state:a.state,enrolled:a.enrolledAt??'-',last_seen:a.lastSeen??'never',last_sequence:String(a.lastSequence),version:a.version??'-',build_id:a.build??'-',git_commit:a.gitCommit??'-',platform:platform(a.os,a.arch),artifact_sha_256:a.artifactSha256??'-',protocol_version:a.protocolVersion==null?'-':String(a.protocolVersion),schema_version:a.schemaVersion==null?'-':String(a.schemaVersion),features:a.features??'-',certificate_sha_256:a.certificateSha256??'-'} };
 });
 
 app.get('/portal-api/findings', async (request) => {
   const actor=currentSession(request); const query=request.query as Record<string,string|undefined>;
-  if(config.legacyOperatorApi){const params=paramsFrom(query,['agent','trust','performance','status','target'],50);params.set('offset','0');return {...parseFindingSearch(await coordinator.request(`/api/v1/operator/finding-search?${params}`)),nextCursor:null,compatibilityMode:true};}
+  if(config.legacyOperatorApi && actor.tenantId !== 'demo'){const params=paramsFrom(query,['agent','trust','performance','status','target'],50);params.set('offset','0');return {...parseFindingSearch(await coordinator.request(`/api/v1/operator/finding-search?${params}`)),nextCursor:null,compatibilityMode:true};}
   const params=paramsFrom(query,['cursor','agent','trust','performance','status','target','severity','rule','assessment','olderThanSeconds','newerThanSeconds']); const page=await coordinator.requestJson<Page<FindingJson>>(`/api/v1/findings?${params}`,{actor});
   return {items:page.items.map((f)=>({id:f.id,lastSeen:f.lastSeen??'-',agent:f.agentName,target:f.subject??networkSubject(f.host,f.port),subjectType:f.subjectType,subjectId:f.subjectId,host:f.host,port:f.port,type:f.type??'-',semanticType:f.semanticType??'-',severity:f.severity??'-',confidence:f.confidence??'-',assessment:f.assessment??'-',trust:f.trust,performance:f.performance,count:f.count,status:f.status??'-',population:f.population??'-',incident:f.incidentId??'-',observedFrom:f.observedFrom,observedTo:f.observedTo,evidenceRoot:f.evidenceRoot,ruleSet:f.ruleSet})),nextCursor:page.nextCursor,matched:page.matched??null,compatibilityMode:false};
 });
 
 app.get('/portal-api/findings/summary', async (request) => {
   const actor=currentSession(request);
-  if(config.legacyOperatorApi)throw new CoordinatorError('unified finding summary requires the structured coordinator API',409,'');
+  if(config.legacyOperatorApi && actor.tenantId !== 'demo')throw new CoordinatorError('unified finding summary requires the structured coordinator API',409,'');
   return coordinator.requestJson<unknown>('/api/v1/findings/summary',{actor});
 });
 
 app.get('/portal-api/findings/bulk-preview', async (request) => {
   const actor=requireRole(request,'OPERATOR');
-  if(config.legacyOperatorApi) throw new CoordinatorError('bulk finding operations require the structured coordinator API',409,'');
+  if(config.legacyOperatorApi && actor.tenantId !== 'demo') throw new CoordinatorError('bulk finding operations require the structured coordinator API',409,'');
   const query=request.query as Record<string,string|undefined>;
   const params=findingFilterParams(query);
   return coordinator.requestJson<FindingBulkPreview>(`/api/v1/operator/finding-bulk-preview?${params}`,{admin:true,actor});
@@ -197,7 +220,7 @@ app.get('/portal-api/findings/bulk-preview', async (request) => {
 
 app.post('/portal-api/findings/bulk-resolve', async (request, reply) => {
   const actor=requireRole(request,'OPERATOR');
-  if(config.legacyOperatorApi) throw new CoordinatorError('bulk finding operations require the structured coordinator API',409,'');
+  if(config.legacyOperatorApi && actor.tenantId !== 'demo') throw new CoordinatorError('bulk finding operations require the structured coordinator API',409,'');
   const body=validation(()=>validateFindingBulk(request.body));
   const ids=operationHeaders(request as unknown as {headers:Record<string,unknown>});
   const params=new URLSearchParams({reason:body.reason});
@@ -209,7 +232,7 @@ app.post('/portal-api/findings/bulk-resolve', async (request, reply) => {
 
 app.post('/portal-api/findings/bulk-purge', async (request, reply) => {
   const actor=requireRole(request,'ADMIN');
-  if(config.legacyOperatorApi) throw new CoordinatorError('bulk finding operations require the structured coordinator API',409,'');
+  if(config.legacyOperatorApi && actor.tenantId !== 'demo') throw new CoordinatorError('bulk finding operations require the structured coordinator API',409,'');
   const body=validation(()=>validateFindingBulk(request.body));
   const ids=operationHeaders(request as unknown as {headers:Record<string,unknown>});
   const params=new URLSearchParams({reason:body.reason,confirmed:'true'});
@@ -244,7 +267,7 @@ app.post('/portal-api/findings/:finding/purge', async (request, reply) => {
 
 app.get('/portal-api/upgrades', async (request) => {
   const actor=currentSession(request); const query=request.query as Record<string,string|undefined>;
-  if(config.legacyOperatorApi){const params=paramsFrom(query,['agent'],20);return {items:parseUpgrades(await coordinator.request(`/api/v1/operator/upgrades?${params}`)),nextCursor:null,compatibilityMode:true};}
+  if(config.legacyOperatorApi && actor.tenantId !== 'demo'){const params=paramsFrom(query,['agent'],20);return {items:parseUpgrades(await coordinator.request(`/api/v1/operator/upgrades?${params}`)),nextCursor:null,compatibilityMode:true};}
   const params=paramsFrom(query,['cursor','agent','status'],50); const page=await coordinator.requestJson<Page<UpgradeJson>>(`/api/v1/upgrades?${params}`,{actor});
   return {items:page.items.map((u)=>({id:u.id,agent:u.agentId,from:build(u.fromVersion,u.fromBuild),target:build(u.targetVersion,u.targetBuild),status:u.status,platform:platform(u.os,u.arch),source:`${u.sourceType.toLowerCase()} ${u.sourceRef}`,requested:u.requestedAt})),nextCursor:page.nextCursor,compatibilityMode:false};
 });
@@ -258,7 +281,7 @@ app.post('/portal-api/upgrades/request', async (request, reply) => {
 
 app.get('/portal-api/certificates', async (request) => {
   const actor=currentSession(request); const query=request.query as Record<string,string|undefined>;
-  if(config.legacyOperatorApi)return {items:parseCertificates(await coordinator.request('/api/v1/operator/certificates')).map((c)=>({...c,agentId:c.agent})),nextCursor:null,compatibilityMode:true};
+  if(config.legacyOperatorApi && actor.tenantId !== 'demo')return {items:parseCertificates(await coordinator.request('/api/v1/operator/certificates')).map((c)=>({...c,agentId:c.agent})),nextCursor:null,compatibilityMode:true};
   const params=paramsFrom(query,['cursor','state','search']); const page=await coordinator.requestJson<Page<CertificateJson>>(`/api/v1/certificates?${params}`,{actor});
   return {items:page.items.map((c)=>({agentId:c.agentId,agent:c.agentName,agentStatus:c.agentStatus,state:c.state,remaining:remaining(c.notAfter),notAfter:c.notAfter??'-',fingerprint:c.fingerprint??'-'})),nextCursor:page.nextCursor,compatibilityMode:false};
 });
@@ -283,7 +306,7 @@ app.post('/portal-api/agents/:agent/certificate/rotate', async (request, reply) 
 
 app.get('/portal-api/dashboard', async (request) => {
   const actor=currentSession(request);
-  if(config.legacyOperatorApi){const [agentText,findingText,certificateText,healthText]=await Promise.all([coordinator.request('/api/v1/operator/agents'),coordinator.request('/api/v1/operator/finding-summary'),coordinator.request('/api/v1/operator/certificate-summary'),coordinator.request('/actuator/health')]);const agents=parseAgents(agentText);const findingMetrics=parseMetricBlock(findingText);const certificateMetrics=parseMetricBlock(certificateText);let coordinatorStatus='UNKNOWN';try{coordinatorStatus=JSON.parse(healthText).status??'UNKNOWN';}catch{coordinatorStatus=healthText.trim()||'UNKNOWN';}return {agents:{total:agents.length,online:agents.filter((a)=>a.state==='ACTIVE').length,offline:agents.filter((a)=>a.state!=='ACTIVE').length,linux:agents.filter((a)=>a.platform.toLowerCase().startsWith('linux')).length,windows:agents.filter((a)=>a.platform.toLowerCase().startsWith('windows')).length},findings:findingMetrics,certificates:certificateMetrics,coordinator:{status:coordinatorStatus},compatibilityMode:true};}
+  if(config.legacyOperatorApi && actor.tenantId !== 'demo'){const [agentText,findingText,certificateText,healthText]=await Promise.all([coordinator.request('/api/v1/operator/agents'),coordinator.request('/api/v1/operator/finding-summary'),coordinator.request('/api/v1/operator/certificate-summary'),coordinator.request('/actuator/health')]);const agents=parseAgents(agentText);const findingMetrics=parseMetricBlock(findingText);const certificateMetrics=parseMetricBlock(certificateText);let coordinatorStatus='UNKNOWN';try{coordinatorStatus=JSON.parse(healthText).status??'UNKNOWN';}catch{coordinatorStatus=healthText.trim()||'UNKNOWN';}return {agents:{total:agents.length,online:agents.filter((a)=>a.state==='ACTIVE').length,offline:agents.filter((a)=>a.state!=='ACTIVE').length,linux:agents.filter((a)=>a.platform.toLowerCase().startsWith('linux')).length,windows:agents.filter((a)=>a.platform.toLowerCase().startsWith('windows')).length},findings:findingMetrics,certificates:certificateMetrics,coordinator:{status:coordinatorStatus},compatibilityMode:true};}
   const [summary,health]=await Promise.all([coordinator.requestJson<FleetSummary>('/api/v1/fleet/summary',{actor}),coordinator.requestJson<{status?:string}>('/actuator/health')]); return {...summary,coordinator:{status:health.status??'UNKNOWN'},compatibilityMode:false};
 });
 

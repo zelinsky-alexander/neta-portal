@@ -14,6 +14,7 @@ export type PortalConfig = {
   key?: Buffer;
   allowInsecureHttp: boolean;
   legacyOperatorApi: boolean;
+  demoEnabled: boolean;
   users: PortalUser[];
   sessionSecret: string;
   sessionTtlSeconds: number;
@@ -69,6 +70,7 @@ export function loadConfig(): PortalConfig {
     key,
     allowInsecureHttp,
     legacyOperatorApi: bool('NETA_PORTAL_LEGACY_OPERATOR_API', false),
+    demoEnabled: bool('NETA_PORTAL_DEMO_ENABLED', true),
     users,
     sessionSecret,
     sessionTtlSeconds

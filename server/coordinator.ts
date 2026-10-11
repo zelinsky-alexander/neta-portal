@@ -45,6 +45,7 @@ export class CoordinatorClient {
       headers['x-neta-portal-service'] = this.config.portalServiceName;
       headers['x-neta-actor'] = init.actor.sub;
       headers['x-neta-actor-role'] = init.actor.role;
+      if (init.actor.tenantId) headers['x-neta-tenant'] = init.actor.tenantId;
     }
     if (init.admin) {
       if (!this.config.adminToken) throw new CoordinatorError('Coordinator admin operations are not configured', 503, '');

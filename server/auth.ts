@@ -1,8 +1,8 @@
 import { createHmac, randomBytes, scryptSync, timingSafeEqual } from 'node:crypto';
 
 export type PortalRole = 'VIEWER' | 'OPERATOR' | 'ADMIN';
-export type PortalUser = { username: string; passwordHash: string; role: PortalRole };
-export type PortalSession = { sub: string; role: PortalRole; csrf: string; iat: number; exp: number };
+export type PortalUser = { username: string; passwordHash: string; role: PortalRole; tenantId?: string };
+export type PortalSession = { sub: string; role: PortalRole; tenantId?: string; csrf: string; iat: number; exp: number };
 
 const ROLE_LEVEL: Record<PortalRole, number> = { VIEWER: 1, OPERATOR: 2, ADMIN: 3 };
 const SCRYPT_OPTIONS = { N: 16384, r: 8, p: 1, maxmem: 64 * 1024 * 1024 } as const;
@@ -22,6 +22,7 @@ export function parseUsers(raw: string | undefined): PortalUser[] {
     const username = typeof row.username === 'string' ? row.username.trim() : '';
     const passwordHash = typeof row.passwordHash === 'string' ? row.passwordHash : '';
     const role = typeof row.role === 'string' ? row.role.toUpperCase() as PortalRole : 'VIEWER';
+    if (username.toLowerCase() === 'demo') throw new Error('demo is a reserved portal username');
     if (!username || username.length > 128) throw new Error('portal username is required and must be <= 128 characters');
     if (!['VIEWER','OPERATOR','ADMIN'].includes(role)) throw new Error(`invalid portal role for ${username}`);
     if (!/^scrypt\$[0-9a-f]{32,}\$[0-9a-f]{64}$/i.test(passwordHash)) throw new Error(`invalid scrypt password hash for ${username}`);
@@ -76,7 +77,7 @@ export function scopesFor(role: PortalRole): string[] {
 }
 
 export function createSession(user: PortalUser, secret: string, ttlSeconds: number, nowSeconds = Math.floor(Date.now()/1000)): { token: string; session: PortalSession } {
-  const session: PortalSession = { sub: user.username, role: user.role, csrf: randomBytes(24).toString('base64url'), iat: nowSeconds, exp: nowSeconds + ttlSeconds };
+  const session: PortalSession = { sub: user.username, role: user.role, ...(user.tenantId ? { tenantId: user.tenantId } : {}), csrf: randomBytes(24).toString('base64url'), iat: nowSeconds, exp: nowSeconds + ttlSeconds };
   const payload = b64url(JSON.stringify(session));
   const signature = createHmac('sha256', secret).update(payload).digest('base64url');
   return { token: `${payload}.${signature}`, session };
@@ -93,6 +94,8 @@ export function verifySession(token: string | undefined, secret: string, nowSeco
   try {
     const session = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8')) as PortalSession;
     if (!session.sub || !['VIEWER','OPERATOR','ADMIN'].includes(session.role) || !session.csrf || !Number.isInteger(session.exp) || session.exp <= nowSeconds) return null;
+    if (session.sub.toLowerCase() === 'demo' && (session.tenantId !== 'demo' || session.role !== 'VIEWER')) return null;
+    if (session.tenantId !== undefined && session.tenantId !== 'demo') return null;
     return session;
   } catch { return null; }
 }
